@@ -293,6 +293,7 @@ bun test tests/tasks.test.ts --timeout 15000
 
 The crash checks require Linux, `strace`, and permission to trace child processes.
 The before-commit check kills the daemon at journal synchronization before database page writes.
+A second pre-commit check kills the daemon after database page writes and verifies automatic journal rollback.
 The after-commit check withholds the socket response, kills the daemon, and then disconnects the caller.
-Both checks read and retry through CLI or MCP after restart.
+All crash checks read and retry through CLI or MCP after restart.
 No application fault flag or direct database query determines the saved result.

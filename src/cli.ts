@@ -30,7 +30,7 @@ Use STATEWELL_HOME to select the local registration directory.
 Keep data outside repositories. Only an existing main instance starts automatically.
 Other instances require explicit startup. Removal preserves data.
 Project registration requires an exact absolute root. Queries do not create stores.
-Task input uses JSON. Tasks remain in todo; approval and workflow transitions are unavailable.`);
+Task input uses JavaScript Object Notation (JSON). Tasks remain in todo; approval and workflow transitions are unavailable.`);
     process.exit(0);
   }
   const options: Record<string, string> = {};

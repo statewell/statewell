@@ -3,7 +3,7 @@ import { projectOperation, resolveProject } from "./projects.ts";
 import { Database } from "bun:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { join } from "node:path";
-import { existsSync, lstatSync, openSync, closeSync } from "node:fs";
+import { existsSync, lstatSync, openSync, closeSync, readSync, fstatSync, constants } from "node:fs";
 import { failure, StatewellError } from "./errors.ts";
 
 const { directory, create } = workerData as { directory: string; create: boolean };
@@ -19,7 +19,16 @@ try {
   if (existed) {
     let inspection: Database | undefined;
     try {
-      inspection = new Database(path, { readonly: true, strict: true });
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const file = fstatSync(fd);
+        const header = Buffer.alloc(100);
+        if (!file.isFile() || file.nlink !== 1 || readSync(fd, header, 0, 100, 0) !== 100 ||
+            header.subarray(0, 16).toString() !== "SQLite format 3\0" ||
+            header.readUInt32BE(60) !== 1 || header.readUInt32BE(68) !== 0x5354574c) throw new Error();
+      } finally { closeSync(fd); }
+      // SQLite must roll back a pending journal before schema inspection.
+      inspection = new Database(path, { create: false, readwrite: true, strict: true });
       const identity = inspection.query("SELECT id FROM instance").all() as { id: string }[];
       if (identity.length !== 1 || !/^[0-9a-f-]{36}$/.test(identity[0]!.id)) throw new Error();
       inspection.query("SELECT root, id FROM projects LIMIT 0").all();
@@ -42,7 +51,7 @@ try {
     db.transaction(() => {
       db.exec("CREATE TABLE instance (id TEXT PRIMARY KEY); CREATE TABLE projects (root TEXT PRIMARY KEY, id TEXT NOT NULL);");
       createTaskTables(db);
-      db.exec("PRAGMA user_version=1");
+      db.exec("PRAGMA user_version=1; PRAGMA application_id=1398036300");
       db.query("INSERT INTO instance VALUES (?)").run(crypto.randomUUID());
     })();
   }

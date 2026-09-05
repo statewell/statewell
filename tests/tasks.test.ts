@@ -20,8 +20,8 @@ async function fixture() {
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, result: JSON.parse(out || err) };
   }
-  async function start(name = "test", trace?: string) {
-    const prefix = trace ? ["strace", "-f", "-yy", "-e", "trace=fsync,pwrite64", "-e", "inject=fsync:signal=SIGKILL:when=1", "-o", trace] : [];
+  async function start(name = "test", trace?: string, synchronization = 1) {
+    const prefix = trace ? ["strace", "-f", "-yy", "-e", "trace=fsync,pwrite64", "-e", `inject=fsync:signal=SIGKILL:when=${synchronization}`, "-o", trace] : [];
     const child = Bun.spawn([...prefix, ...command, "instance", "start", "--instance", name], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     daemons.push(child);
     const reader = child.stdout.getReader();
@@ -212,4 +212,29 @@ test("death after commit with a withheld response preserves the exact retry resu
   expect(withheld.value.checkpointCount).toBe(2);
   expect(withheld.value.checkpoint.content).toEqual(update.checkpoint);
   expect(await f.task("read", { taskId: input.taskId })).toEqual(withheld);
+});
+
+
+test("death after database page writes rolls back the pending journal before reads", async () => {
+  const f = await fixture(); const input = createInput();
+  const prior = await f.task("create", input);
+  f.daemon.kill("SIGKILL"); await f.daemon.exited;
+  const trace = join(f.root, "late-before-commit.trace");
+  const traced = await f.start("test", trace, 4);
+  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "Interrupted after page writes." } };
+  expect(await f.task("save", update)).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
+  await traced.exited;
+  const syscalls = readFileSync(trace, "utf8");
+  expect(syscalls).toMatch(/pwrite64\([^\n]*state\.sqlite>/);
+  expect(syscalls).toMatch(/fsync\([^\n]*state\.sqlite>/);
+  expect(syscalls).toContain("SIGKILL");
+  await f.start();
+  const mcp = await f.mcp();
+  expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(prior);
+  const retried = await mcp("task_save", { root: f.project, ...update });
+  expect(retried.error).toBeUndefined();
+  expect(retried.value.task.revision).toBe(2);
+  expect(retried.value.checkpointCount).toBe(2);
+  expect(retried.value.checkpoint.content).toEqual(update.checkpoint);
+  expect(await f.task("save", update)).toEqual(retried);
 });
