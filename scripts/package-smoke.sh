@@ -41,7 +41,7 @@ if (records.length !== 1 || !/^[a-zA-Z0-9._-]+\.tgz$/.test(records[0].filename))
   throw new Error('The package archive name is not valid.');
 }
 const archive = join(directory, records[0].filename);
-const allowed = new Set(['package/package.json', 'package/dist/statewell', 'package/docs/INSTANCE-CLI.md', 'package/README.md']);
+const allowed = new Set(['package/package.json', 'package/dist/statewell', 'package/docs/INSTANCE-CLI.md', 'package/README.md', 'package/LICENSE', 'package/NOTICE']);
 const members = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
 if (members.length !== allowed.size || new Set(members).size !== allowed.size || members.some(name => !allowed.has(name))) {
   throw new Error('The package contains missing or unexpected files.');
