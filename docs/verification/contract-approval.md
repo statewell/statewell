@@ -68,12 +68,12 @@ The third case returns the complete committed task and original retry response.
 Retries create one logical result. Approval operations add no checkpoint and preserve earlier progress.
 The tests inspect system-call traces for termination timing. They read saved results only through CLI or MCP.
 
-The source suite passed 47 tests with 496 assertions and no failures.
+The source suite passed 47 tests with 493 assertions and no failures.
 Type checking, compilation, and whitespace checks passed.
-The offline-installed package suite passed 47 tests with 492 assertions and no failures.
+The offline-installed package suite passed 47 tests with 494 assertions and no failures.
 The archive contained exactly six permitted regular files. The installed executable matched the build.
 Assertion counts differ because the existing concurrent removal test checks each observed failure response.
-The executable SHA-256 value was `27ccc1df6562ba3302d7cb39ffabefab75bb5cb8cb5fdebaf23f0be4cb8660f8`.
+The executable SHA-256 value was `95d817608cb0a2dd1e72eaf03557a089287bcd159720a76dee306c5955bb2151`.
 
 ### Earlier schema check
 
@@ -109,7 +109,7 @@ ARM64 and macOS execution remain unverified and deferred after the minimum viabl
 Other Linux system-library variants and minimum operating-system versions are not established by this run.
 
 Documentation was checked against confirmed product decisions, current fields, error behavior, and domain terms.
-Local file links passed. A final language review remains pending.
+Local file and heading links passed. The Standards review found no documented language-rule violations.
 Formal ASD-STE100 dictionary review remains incomplete.
 
 The Bun transaction behavior was checked through Context7 against [the Bun SQLite documentation](https://github.com/oven-sh/bun/blob/main/docs/runtime/sqlite.mdx).
@@ -128,4 +128,8 @@ The maintainer requested issue #6 through the work-ticket skill.
 Confirmed decisions authorize Bun with `bun:sqlite` and Linux x64 for the MVP.
 The selected CLI/MCP test boundary was accepted in parent issue #1.
 
-The two-axis code review, push verification, issue report, and maintainer acceptance remain pending.
+The Standards review found no documented violations and suggested explicit typed operation dispatch.
+That suggestion was implemented and rechecked. Both final test runs include the change.
+The Spec review found no remaining omissions, incorrect behavior, or scope creep.
+Both review axes have zero unresolved findings.
+Push verification, the issue report, and maintainer acceptance remain pending.

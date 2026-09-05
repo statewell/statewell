@@ -33,6 +33,10 @@ export const taskSchemas = {
   "task.contract": z.object({ ...selection, contractRevision: revision }).strict(),
   "task.proposal": z.object({ ...selection, proposalId: z.string().uuid() }).strict(),
 };
+type TaskRequest = {
+  [Operation in keyof typeof taskSchemas]: { operation: Operation; input: z.infer<(typeof taskSchemas)[Operation]> }
+}[keyof typeof taskSchemas];
+
 export const taskDescriptions: Record<keyof typeof taskSchemas, string> = {
   "task.create": "Prepare a task in todo with a contract and checkpoint.",
   "task.save": "Save a checkpoint against the current task and contract revisions.",
@@ -103,15 +107,15 @@ export function taskOperation(db: Database, directory: string, operation: string
   if (!Object.hasOwn(taskSchemas, operation)) throw new StatewellError("UNKNOWN_OPERATION", "The operation is not available.");
   const parsed = taskSchemas[operation as keyof typeof taskSchemas].safeParse(raw);
   if (!parsed.success) throw new StatewellError("INVALID_TASK_INPUT", "Supply all required task fields with valid values. Unknown fields are not permitted.");
-  const input = parsed.data as z.infer<typeof taskSchemas["task.create"]> | z.infer<typeof taskSchemas["task.save"]> | z.infer<typeof taskSchemas["task.read"]> | z.infer<typeof taskSchemas["task.check"]> | z.infer<typeof taskSchemas["task.approve"]> | z.infer<typeof taskSchemas["task.propose"]> | z.infer<typeof taskSchemas["task.contract"]> | z.infer<typeof taskSchemas["task.proposal"]>;
+  const { operation: action, input } = { operation, input: parsed.data } as TaskRequest;
   const { project } = projectOperation(db, directory, "project.inspect", input);
   const projectId = project.id!;
-  if (!("expectedRevision" in input)) {
-    if ("contractRevision" in input) return { project, contract: readContract(db, projectId, input.taskId, input.contractRevision) };
-    if ("proposalId" in input) return { project, proposal: readProposal(db, projectId, input.taskId, input.proposalId) };
+  if (action === "task.read" || action === "task.contract" || action === "task.proposal") {
+    if (action === "task.contract") return { project, contract: readContract(db, projectId, input.taskId, input.contractRevision) };
+    if (action === "task.proposal") return { project, proposal: readProposal(db, projectId, input.taskId, input.proposalId) };
     return { project, ...readTask(db, projectId, input.taskId) };
   }
-  if (!("retryKey" in input)) {
+  if (action === "task.check") {
     const current = readTask(db, projectId, input.taskId);
     checkRevisions(current, input);
     if (!current.task.approval) throw new StatewellError("APPROVAL_REQUIRED", "Record approval of the initial contract before implementation.");
@@ -126,7 +130,7 @@ export function taskOperation(db: Database, directory: string, operation: string
       return JSON.parse(retry.response);
     }
     let contractRevision = 1;
-    if (!("expectedContractRevision" in input)) {
+    if (action === "task.create") {
       if (db.query("SELECT 1 FROM tasks WHERE project_id = ? AND id = ?").get(projectId, input.taskId)) throw new StatewellError("TASK_EXISTS", "The selected project already has this task identifier.");
       db.query("INSERT INTO tasks VALUES (?, ?, 1, 1)").run(projectId, input.taskId);
       db.query("INSERT INTO contracts VALUES (?, ?, 1, ?, ?, NULL)").run(projectId, input.taskId, JSON.stringify(input.contract), JSON.stringify(input.source));
@@ -134,7 +138,7 @@ export function taskOperation(db: Database, directory: string, operation: string
       const current = readTask(db, projectId, input.taskId);
       checkRevisions(current, input);
       contractRevision = current.task.contractRevision;
-      if ("approval" in input) {
+      if (action === "task.approve") {
         const proposal = input.proposalId ? readProposal(db, projectId, input.taskId, input.proposalId) : null;
         if (proposal && proposal.baseContractRevision !== contractRevision) throw new StatewellError("STALE_CONTRACT_REVISION", "The proposal refers to an earlier contract. Prepare a new proposal.");
         if (!proposal && current.task.approval) throw new StatewellError("ALREADY_APPROVED", "The initial contract already has approval. Propose a change separately.");
@@ -147,13 +151,13 @@ export function taskOperation(db: Database, directory: string, operation: string
         } else {
           db.query("UPDATE contracts SET approval = ? WHERE project_id = ? AND task_id = ? AND revision = 1").run(JSON.stringify(input.approval), projectId, input.taskId);
         }
-      } else if ("proposalId" in input) {
+      } else if (action === "task.propose") {
         if (db.query("SELECT 1 FROM proposals WHERE project_id = ? AND task_id = ? AND id = ?").get(projectId, input.taskId, input.proposalId)) throw new StatewellError("PROPOSAL_EXISTS", "This proposal identifier already exists. Use a new identifier.");
         db.query("INSERT INTO proposals VALUES (?, ?, ?, ?, ?, ?)").run(projectId, input.taskId, input.proposalId, contractRevision, JSON.stringify(input.contract), JSON.stringify(input.source));
       }
       db.query("UPDATE tasks SET revision = revision + 1, contract_revision = ? WHERE project_id = ? AND id = ?").run(contractRevision, projectId, input.taskId);
     }
-    if ("checkpoint" in input) db.query("INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)").run(projectId, input.taskId, input.expectedRevision + 1, contractRevision, JSON.stringify(input.checkpoint));
+    if (action === "task.create" || action === "task.save") db.query("INSERT INTO checkpoints VALUES (?, ?, ?, ?, ?)").run(projectId, input.taskId, input.expectedRevision + 1, contractRevision, JSON.stringify(input.checkpoint));
     const response = { project, ...readTask(db, projectId, input.taskId) };
     db.query("INSERT INTO task_retries VALUES (?, ?, ?, ?)").run(projectId, input.retryKey, payload, JSON.stringify(response));
     return response;
