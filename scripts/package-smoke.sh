@@ -57,4 +57,4 @@ installed_binary="$smoke_dir/install/node_modules/.bin/statewell"
 [[ -x "$installed_binary" ]]
 cmp -- "$project_dir/dist/statewell" "$installed_binary"
 "${smoke_env[@]}" "STATEWELL_HOME=$smoke_state" "STATEWELL_TEST_BINARY=$installed_binary" \
-  "$bun_binary" test tests/instances.test.ts --timeout 15000
+  "$bun_binary" test tests/instances.test.ts tests/lifecycle.test.ts --timeout 15000
