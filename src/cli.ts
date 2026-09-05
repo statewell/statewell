@@ -1,3 +1,4 @@
+import { readFileSync, openSync, fstatSync, closeSync, constants } from "node:fs";
 import { failure, StatewellError } from "./errors.ts";
 import { loadInstance } from "./instances.ts";
 import { startDaemon } from "./daemon.ts";
@@ -10,7 +11,7 @@ try {
   if (process.platform !== "linux" || process.arch !== "x64") throw new StatewellError("UNSUPPORTED_PLATFORM", "This version requires Linux x64.");
   const args = process.argv.slice(2);
   if (args.length === 0 || args.includes("--help")) {
-    console.log(`Statewell instance and project commands
+    console.log(`Statewell instance, project, and task commands
 
 instance create [--instance NAME] [--data-dir PATH]
 instance start [--instance NAME] [--detached]
@@ -20,12 +21,16 @@ instance inspect [--instance NAME]
 project resolve [--instance NAME] [--root PATH]
 project register --root PATH [--instance NAME] [--project-id ID]
 project inspect --root PATH [--instance NAME] [--project-id ID]
+task create --root PATH --input FILE [--instance NAME] [--project-id ID]
+task save --root PATH --input FILE [--instance NAME] [--project-id ID]
+task read --root PATH --input FILE [--instance NAME] [--project-id ID]
 mcp [--instance NAME]
 
 Use STATEWELL_HOME to select the local registration directory.
 Keep data outside repositories. Only an existing main instance starts automatically.
 Other instances require explicit startup. Removal preserves data.
-Project registration requires an exact absolute root. Queries do not create stores.`);
+Project registration requires an exact absolute root. Queries do not create stores.
+Task input uses JSON. Tasks remain in todo; approval and workflow transitions are unavailable.`);
     process.exit(0);
   }
   const options: Record<string, string> = {};
@@ -34,14 +39,14 @@ Project registration requires an exact absolute root. Queries do not create stor
     const arg = args[index]!;
     if (arg === "--detached") { if (options[arg]) throw new StatewellError("USAGE", "Supply each option only once."); options[arg] = "true"; }
     else if (arg.startsWith("--")) {
-      if (!["--instance", "--data-dir", "--root", "--project-id"].includes(arg) || !args[index + 1] || args[index + 1]!.startsWith("--")) throw new StatewellError("USAGE", "Supply a value for a supported option.");
+      if (!["--instance", "--data-dir", "--root", "--project-id", "--input"].includes(arg) || !args[index + 1] || args[index + 1]!.startsWith("--")) throw new StatewellError("USAGE", "Supply a value for a supported option.");
       if (options[arg] !== undefined) throw new StatewellError("USAGE", "Supply each option only once.");
       options[arg] = args[++index]!;
     } else commands.push(arg);
   }
   const name = options["--instance"] ?? "main";
   const command = commands.join(" ");
-  const allowed = command === "instance create" ? ["--instance", "--data-dir"] : command === "instance start" ? ["--instance", "--detached"] : command.startsWith("project ") ? ["--instance", "--root", "--project-id"] : ["--instance"];
+  const allowed = command === "instance create" ? ["--instance", "--data-dir"] : command === "instance start" ? ["--instance", "--detached"] : command.startsWith("task ") ? ["--instance", "--root", "--project-id", "--input"] : command.startsWith("project ") ? ["--instance", "--root", "--project-id"] : ["--instance"];
   if (Object.keys(options).some(option => !allowed.includes(option))) throw new StatewellError("USAGE", "The command does not accept this option.");
   if (command === "instance create") console.log(JSON.stringify({ instance: await createInstance(name, options["--data-dir"]) }));
   else if (command === "instance inspect") console.log(JSON.stringify(await new InstanceClient(name).request("instance.inspect")));
@@ -54,6 +59,20 @@ Project registration requires an exact absolute root. Queries do not create stor
     }
     if (options["--detached"]) { await launchDetached(instance); console.log(JSON.stringify({ ready: true, instance })); }
     else await startDaemon(instance);
+  }
+  else if (["task create", "task save", "task read"].includes(command)) {
+    if (!options["--input"]) throw new StatewellError("USAGE", "Supply a JSON input file with --input.");
+    const fd = openSync(options["--input"], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    let input;
+    try {
+      const file = fstatSync(fd);
+      if (!file.isFile() || file.size > 12000) throw new StatewellError("INVALID_TASK_INPUT", "Use a regular JSON file of at most 12000 bytes.");
+      const content = readFileSync(fd);
+      if (content.length > 12000) throw new StatewellError("INVALID_TASK_INPUT", "The task input exceeds 12000 bytes.");
+      input = JSON.parse(content.toString());
+      if (!input || typeof input !== "object" || Array.isArray(input) || "root" in input || "projectId" in input) throw new StatewellError("INVALID_TASK_INPUT", "Select the project through command options.");
+    } finally { closeSync(fd); }
+    console.log(JSON.stringify(await new InstanceClient(name).request(command.replace(" ", "."), { ...input, root: options["--root"], projectId: options["--project-id"] })));
   }
   else if (command === "mcp") await (await import("./mcp.ts")).startMcp(name);
   else if (command === "project register" || command === "project inspect" || command === "project resolve") console.log(JSON.stringify(await new InstanceClient(name).request(command.replace(" ", "."), { root: options["--root"] ?? (command === "project resolve" ? process.cwd() : undefined), projectId: options["--project-id"] })));

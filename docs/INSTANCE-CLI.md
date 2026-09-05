@@ -161,3 +161,138 @@ Successful CLI operations return JSON on stdout.
 
 These bounds apply to this initial interface. They do not promise database progress during a slow operation.
 No backup, restoration, migration, memory, inference, or task workflow is implemented here.
+
+## Task preparation and checkpoints
+
+Task storage is available through the command-line interface (CLI) and Model Context Protocol (MCP).
+Tasks remain in `todo`. Approval, contract changes, and workflow transitions are not available in this version.
+A saved checkpoint does not authorize implementation or certify evidence.
+
+Use a new disposable instance for this version.
+Earlier database schemas return `INVALID_STORE` without migration.
+Keep earlier data and its compatible executable if you need to read that data.
+Do not delete an earlier database to bypass this error.
+
+### Prepare a task
+
+Register the project in the selected instance first.
+Create a JSON input file with this structure:
+
+```json
+{
+  "taskId": "00000000-0000-4000-8000-000000000001",
+  "retryKey": "prepare-task-1",
+  "expectedRevision": 0,
+  "contract": {
+    "goal": "Check saved task persistence.",
+    "scopeLimits": ["Do not change normal work data."],
+    "acceptanceChecks": ["Read the exact task after restart."],
+    "dependencyConditions": []
+  },
+  "checkpoint": {
+    "progress": "Prepared the persistence check.",
+    "remainingWork": ["Restart the test instance."],
+    "nextAction": "Restart the test instance.",
+    "blockers": [],
+    "evidence": [],
+    "repositoryState": {
+      "worktree": "/absolute/project",
+      "branch": "main",
+      "commit": null,
+      "uncommittedChanges": []
+    },
+    "uncertainExternalEffects": []
+  }
+}
+```
+
+Use a new task identifier and retry key for a new task.
+Replace the example project and repository values with the actual selected values.
+
+```sh
+statewell task create --instance test --root /absolute/project --input /absolute/task.json
+```
+
+The CLI input must be a regular JSON file of at most 12000 bytes.
+Select the project with `--root` and optional `--project-id`, not through the input file.
+Unknown input fields are rejected.
+
+The contract stores the goal, scope limits, acceptance checks, and dependency conditions separately from progress.
+Each contract requires a goal and at least one acceptance check.
+An empty array explicitly indicates no scope limits or dependency conditions.
+
+Each checkpoint requires all seven content fields shown above.
+Text values must contain non-whitespace characters. Statewell preserves the submitted text.
+An empty array explicitly indicates no remaining work, blockers, evidence, uncommitted changes, or uncertain effects.
+Each blocker requires `reason` and `continuationCondition` text fields.
+The repository worktree is required. Use `null` for an absent branch or commit.
+A `todo` task requires one next action. A missing field is not an absence value.
+
+### Save a checkpoint
+
+Use `task save` with a file that contains these fields:
+
+- `taskId`: The saved task identifier.
+- `retryKey`: A new key for this change.
+- `expectedRevision`: The task revision that you read.
+- `checkpoint`: All required checkpoint fields.
+
+```sh
+statewell task save --instance test --root /absolute/project --input /absolute/checkpoint.json
+```
+
+Each successful save increases the task revision and adds one checkpoint.
+The initial contract remains unchanged at contract revision 1.
+The response includes the task, latest checkpoint, checkpoint count, project, and instance.
+Earlier checkpoints remain stored. History selection is not available through these commands.
+
+Statewell commits the task revision, checkpoint, and retry response in one SQLite transaction.
+A stale revision returns `STALE_REVISION` without a change.
+A task identifier that already exists returns `TASK_EXISTS` for a new creation key.
+A missing task returns `TASK_NOT_FOUND` within the selected project.
+
+### Read and retry
+
+For `task read`, the input file contains only `taskId`.
+
+```sh
+statewell task read --instance test --root /absolute/project --input /absolute/task-reference.json
+```
+
+A read returns the complete current contract and latest checkpoint.
+It does not use GitHub, inference, or the earlier conversation.
+
+If a save response is interrupted, preserve the original operation, input, and retry key.
+Inspect the selected instance and restart it explicitly if necessary.
+Retry the original request to recover its saved result.
+A successful retry returns the original response, even if a later checkpoint exists.
+A changed request under the same key returns `RETRY_CONFLICT` without changing state.
+Read the task separately when you need its latest revision.
+
+Retry keys belong to the selected project within one instance.
+The operation, task, resolved project root, expected revision, and content identify the retry payload.
+JSON object field order does not change the payload. Array order and text content do change it.
+Retry results remain stored; automatic removal is not implemented.
+Statewell retries do not make external actions execute exactly once.
+
+### MCP operations
+
+Use `task_create`, `task_save`, and `task_read` through the selected MCP instance.
+Their arguments contain the same fields as CLI input, plus `root` and optional `projectId`.
+The shared task validation and transaction rules apply to both interfaces.
+Protocol schema errors can use MCP error formatting.
+Task results contain the same JSON response as CLI results.
+
+### Task verification
+
+Run the task checks with disposable data:
+
+```sh
+bun test tests/tasks.test.ts --timeout 15000
+```
+
+The crash checks require Linux, `strace`, and permission to trace child processes.
+The before-commit check kills the daemon at journal synchronization before database page writes.
+The after-commit check withholds the socket response, kills the daemon, and then disconnects the caller.
+Both checks read and retry through CLI or MCP after restart.
+No application fault flag or direct database query determines the saved result.
