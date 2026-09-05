@@ -45,7 +45,7 @@ try {
     try {
       let value;
       if (request.operation === "instance.inspect") value = { id: instance.id };
-      else if (request.operation === "project.resolve") value = resolveProject(request.input);
+      else if (request.operation === "project.resolve") value = resolveProject(db, request.input);
       else if (["project.register", "project.inspect"].includes(request.operation)) value = projectOperation(db, directory, request.operation, request.input);
       else throw new StatewellError("UNKNOWN_OPERATION", "The operation is not available.");
       parentPort!.postMessage({ requestId: request.requestId, value });

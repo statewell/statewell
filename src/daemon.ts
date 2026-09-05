@@ -1,12 +1,10 @@
 import { createServer, createConnection, type Socket } from "node:net";
 import { chmodSync, lstatSync, unlinkSync, realpathSync } from "node:fs";
-import { join } from "node:path";
 import { openDatabase } from "./database.ts";
 import { claimOwnership } from "./ownership.ts";
 import { failure, StatewellError } from "./errors.ts";
-import { requirePrivateDirectory, type Instance } from "./instances.ts";
+import { endpoint, requirePrivateDirectory, type Instance } from "./instances.ts";
 
-export function endpoint(instance: Instance) { return join(instance.directory, "daemon.sock"); }
 async function removeStaleEndpoint(path: string) {
   let before;
   try { before = lstatSync(path); }

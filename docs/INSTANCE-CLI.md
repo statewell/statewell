@@ -1,6 +1,7 @@
 # Instance and project access
 
 This implementation covers issue #3 on Linux x64.
+It provides a command-line interface (CLI) and the initial project access for the minimum viable product (MVP).
 It requires Bun 1.4.2 for development. The compiled executable contains Bun and the database worker.
 The executable does not require a separate Bun installation.
 ARM64 and macOS remain unverified and are deferred until after the MVP.
@@ -88,7 +89,7 @@ Start a Model Context Protocol (MCP) stdio process with:
 ```
 
 Configure the same `STATEWELL_HOME` for the MCP process and CLI.
-The official MCP TypeScript SDK handles initialization, protocol negotiation, and tool calls.
+The official MCP TypeScript software development kit (SDK) handles initialization, protocol negotiation, and tool calls.
 Available tools are `instance_inspect`, `project_resolve`, `project_register`, and `project_inspect`.
 Project tools accept `root`; registration and inspection also accept an optional expected `projectId`.
 MCP does not use its process directory as a workspace default.
@@ -113,7 +114,7 @@ Task saves and logical retry keys belong to later tickets.
 MCP input frames have a 16384-byte limit. MCP output frames have a 65536-byte limit.
 MCP permits at most 16 pending output writes, each with a one-second deadline.
 A transport-limit failure exits with code 2 and reports an error on stderr.
-CLI operation failures exit with code 1 and return a JSON error on stderr.
+CLI operation failures exit with code 1 and return a JavaScript Object Notation (JSON) error on stderr.
 Successful CLI operations return JSON on stdout.
 
 These bounds apply to this initial interface. They do not promise database progress during a slow operation.

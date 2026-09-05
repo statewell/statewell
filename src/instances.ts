@@ -27,3 +27,5 @@ export function requirePrivateDirectory(directory: string) {
   const status = statSync(directory);
   if (!status.isDirectory() || status.uid !== process.getuid!() || (status.mode & 0o077) !== 0) throw new StatewellError("UNSAFE_DIRECTORY", "Use a data directory owned by you with mode 0700.");
 }
+
+export function endpoint(instance: Instance) { return join(instance.directory, "daemon.sock"); }

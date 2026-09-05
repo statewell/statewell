@@ -139,6 +139,8 @@ test("project discovery returns the nearest Git root without creating a marker",
   expect(found.result.value.root).toBe(repo);
   expect(found.result.value.registrationRequired).toBe(true);
   expect(existsSync(join(repo, ".statewell.json"))).toBe(false);
+  expect((await f.cli("project", "register", "--instance", "test", "--root", repo)).code).toBe(0);
+  expect((await f.cli("project", "resolve", "--instance", "test", "--root", child)).result.value.registrationRequired).toBe(false);
   expect((await f.cli("project", "resolve", "--instance", "test", "--root", f.root)).result.error.code).toBe("PROJECT_SELECTION_REQUIRED");
 });
 
@@ -218,4 +220,18 @@ test("concurrent project registration preserves one marker identity", async () =
   const results = await Promise.all(["first", "second"].map(name => f.cli("project", "register", "--instance", name, "--root", project)));
   expect(results.map(result => result.code)).toEqual([0, 0]);
   expect(results[0]!.result.value.project).toEqual(results[1]!.result.value.project);
+});
+
+test("a registration-directory symlink cannot write records into a repository", async () => {
+  const f = fixture();
+  const { mkdirSync, symlinkSync, readdirSync } = await import("node:fs");
+  const repo = join(f.root, "repo"); mkdirSync(repo);
+  expect(Bun.spawnSync(["git", "init", repo]).exitCode).toBe(0);
+  const registrations = join(repo, "registrations"); mkdirSync(registrations);
+  mkdirSync(f.home); symlinkSync(registrations, join(f.home, "instances"));
+  const result = await f.cli("instance", "create");
+  expect(result.code).toBe(1);
+  expect(result.result.error.code).toBe("DATA_IN_REPOSITORY");
+  expect(readdirSync(registrations)).toEqual([]);
+  expect(existsSync(join(f.home, "data"))).toBe(false);
 });

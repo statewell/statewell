@@ -1,6 +1,5 @@
 import { createConnection } from "node:net";
-import { join } from "node:path";
-import { loadInstance, type Instance } from "./instances.ts";
+import { endpoint, loadInstance, type Instance } from "./instances.ts";
 import { StatewellError } from "./errors.ts";
 
 export class InstanceClient {
@@ -11,7 +10,7 @@ export class InstanceClient {
     if (this.instance && (current.id !== this.instance.id || current.directory !== this.instance.directory)) throw new StatewellError("IDENTITY_CHANGED", "The instance identity changed. Reconnect explicitly.");
     this.instance = current;
     return new Promise<{ instance: Instance; value: any }>((resolve, reject) => {
-      const socket = createConnection(join(current.directory, "daemon.sock"));
+      const socket = createConnection(endpoint(current));
       let buffer = Buffer.alloc(0);
       let finished = false;
       const fail = (error: Error) => { if (finished) return; finished = true; socket.destroy(); reject(error); };

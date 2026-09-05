@@ -30,6 +30,7 @@ export async function createInstance(name: string, dataDirectory?: string) {
     }
     outsideRepository(directory); outsideRepository(canonicalTarget(stateHome()));
     const registrations = dirname(registration);
+    outsideRepository(canonicalTarget(registrations));
     if (existsSync(registrations)) for (const file of readdirSync(registrations).filter(file => file.endsWith(".json"))) {
       const other = JSON.parse(readFileSync(join(registrations, file), "utf8")) as Instance;
       if (other.directory === directory) throw new StatewellError("DIRECTORY_CONFLICT", "Another instance uses this data directory.");

@@ -45,8 +45,10 @@ export function projectOperation(db: Database, directory: string, operation: str
       id = readMarker(path);
       if (!id || (projectId && id !== projectId)) throw new StatewellError("PROJECT_CONFLICT", "The project marker changed during registration.");
     }
-    db.query("INSERT INTO projects (root, id) VALUES (?, ?) ON CONFLICT(root) DO NOTHING").run(canonical, id);
-    if (readMarker(path) !== id) throw new StatewellError("PROJECT_CONFLICT", "The marker changed. Inspect the project before retrying.");
+    db.transaction(() => {
+      db.query("INSERT INTO projects (root, id) VALUES (?, ?) ON CONFLICT(root) DO NOTHING").run(canonical, id!);
+      if (readMarker(path) !== id) throw new StatewellError("PROJECT_CONFLICT", "The marker changed. Inspect the project before retrying.");
+    })();
   } else {
     if (!id) throw new StatewellError("PROJECT_INIT_REQUIRED", "Register the selected project explicitly.");
     if (!existing) throw new StatewellError("PROJECT_NOT_REGISTERED", "Register this project in the selected instance.");
@@ -54,14 +56,18 @@ export function projectOperation(db: Database, directory: string, operation: str
   return { project: { id, root: canonical } };
 }
 
-export function resolveProject(input: unknown) {
+export function resolveProject(db: Database, input: unknown) {
   const { root } = (input ?? {}) as { root?: unknown };
   if (typeof root !== "string" || !isAbsolute(root)) throw new StatewellError("PROJECT_SELECTION_REQUIRED", "Supply an absolute workspace path.");
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-  const result = Bun.spawnSync(["git", "-C", realpathSync(root), "rev-parse", "--show-toplevel"], { env: environment, timeout: 1000, maxBuffer: 4096 });
+  let result;
+  try { result = Bun.spawnSync(["git", "-C", realpathSync(root), "rev-parse", "--show-toplevel"], { env: environment, timeout: 1000, maxBuffer: 4096 }); }
+  catch { throw new StatewellError("PROJECT_SELECTION_REQUIRED", "Git discovery failed. Select the exact root for explicit registration."); }
   if (result.exitCode !== 0) throw new StatewellError("PROJECT_SELECTION_REQUIRED", "Git discovery failed. Select the exact root for explicit registration.");
   const selected = realpathSync(result.stdout.toString().trim());
   if (selected === "/" || selected === realpathSync(homedir())) throw new StatewellError("PROJECT_SELECTION_REQUIRED", "Select a project directory other than the home or filesystem root.");
   const id = readMarker(join(selected, ".statewell.json"));
-  return { root: selected, projectId: id ?? null, registrationRequired: true };
+  const registered = db.query("SELECT id FROM projects WHERE root = ?").get(selected) as { id: string } | null;
+  if (registered && registered.id !== id) throw new StatewellError("PROJECT_CONFLICT", "The marker and registered project identity conflict.");
+  return { root: selected, projectId: id ?? null, registrationRequired: !registered };
 }
