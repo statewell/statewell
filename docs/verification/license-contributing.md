@@ -29,8 +29,9 @@ Acceptance checks:
 - Node.js: v24.20.0.
 - npm: 11.19.0.
 - Bun: 1.4.2.
-- Base commit: 794a201.
-- Tested state: Base commit with the changes described above, before commit.
+- Current main base: 8c601b6.
+- Tested commit after integration: 93a98d6.
+- Tested state: Integrated commit before this evidence update.
 - Worktree: `/tmp/statewell-license-contributing`.
 
 The existing dependency directory supplied build dependencies through a temporary link.
@@ -42,8 +43,8 @@ Place Bun on PATH before you repeat the build command.
 | Check | Command or steps | Expected result | Actual result | Status |
 | --- | --- | --- | --- | --- |
 | Official license | Download the official text linked below. Compare it with LICENSE through `cmp`. | Exact match. | Exit status 0. | Pass. |
-| Build | Run `bun run build` with Bun on PATH. | Produce the Linux x64 executable. | Compiled 253 modules successfully. | Pass. |
-| Package behavior | Set STATEWELL_BUN to the Bun executable. Run `bash scripts/package-smoke.sh`. | Check archive contents, install locally, and pass packaged tests. | Six expected files; installation passed; 14 tests passed; 0 failed; 83 assertions. | Pass. |
+| Build | Run `bun run build` with Bun on PATH. | Produce the Linux x64 executable. | Compiled 255 modules successfully. | Pass. |
+| Package behavior | Set STATEWELL_BUN to the Bun executable. Run `bash scripts/package-smoke.sh`. | Check archive contents, install locally, and pass packaged tests. | Six expected files; installation passed; 26 tests passed; 0 failed; 148 assertions. | Pass. |
 | Script syntax | Run `bash -n scripts/package-smoke.sh`. | No syntax error. | Exit status 0. | Pass. |
 | Whitespace | Run `git diff --check`. | No whitespace errors. | Exit status 0. | Pass. |
 | Document links | Resolve each local Markdown target from its source document. Check the README license anchor. | All targets exist. | All local targets exist. The license heading exists. | Pass. |
@@ -70,6 +71,9 @@ The same package check passed outside the sandbox with disposable installation a
 
 Application code did not change. The full source test suite and type check were not run for this change.
 The compiled package tests cover the affected distribution path.
+Main advanced with instance lifecycle changes during this task.
+Those changes were merged into the branch before the final build and package check.
+Both instance and lifecycle test files passed.
 No package was published to npm.
 
 Manual review checked facts, terms, decision status, short sentences, instructions, and local links.
