@@ -24,13 +24,23 @@ project inspect --root PATH [--instance NAME] [--project-id ID]
 task create --root PATH --input FILE [--instance NAME] [--project-id ID]
 task save --root PATH --input FILE [--instance NAME] [--project-id ID]
 task read --root PATH --input FILE [--instance NAME] [--project-id ID]
+task approve --root PATH --input FILE [--instance NAME] [--project-id ID]
+task propose --root PATH --input FILE [--instance NAME] [--project-id ID]
+task contract --root PATH --input FILE [--instance NAME] [--project-id ID]
+task proposal --root PATH --input FILE [--instance NAME] [--project-id ID]
+task check --root PATH --input FILE [--instance NAME] [--project-id ID]
 mcp [--instance NAME]
 
 Use STATEWELL_HOME to select the local registration directory.
 Keep data outside repositories. Only an existing main instance starts automatically.
 Other instances require explicit startup. Removal preserves data.
 Project registration requires an exact absolute root. Queries do not create stores.
-Task input uses JavaScript Object Notation (JSON). Tasks remain in todo; approval and workflow transitions are unavailable.`);
+Task input uses JavaScript Object Notation (JSON). Tasks remain in todo; workflow transitions are unavailable.
+Record approval of exact saved content with task approve. Propose changes with task propose.
+Use task check before implementation to check recorded approval and checkpoint agreement.
+This check does not verify evidence, dependencies, repository state, or permission for external actions.
+Supply expectedRevision and expectedContractRevision for saves, proposals, approvals, and checks.
+Approval is reported audit evidence. Statewell does not authenticate the maintainer.`);
     process.exit(0);
   }
   const options: Record<string, string> = {};
@@ -60,7 +70,7 @@ Task input uses JavaScript Object Notation (JSON). Tasks remain in todo; approva
     if (options["--detached"]) { await launchDetached(instance); console.log(JSON.stringify({ ready: true, instance })); }
     else await startDaemon(instance);
   }
-  else if (["task create", "task save", "task read"].includes(command)) {
+  else if (["task create", "task save", "task read", "task approve", "task check", "task propose", "task contract", "task proposal"].includes(command)) {
     if (!options["--input"]) throw new StatewellError("USAGE", "Supply a JSON input file with --input.");
     const fd = openSync(options["--input"], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let input;

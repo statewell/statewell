@@ -35,7 +35,8 @@ async function fixture() {
     await client.connect(new StdioClientTransport({ command: command[0]!, args: [...command.slice(1), "mcp", "--instance", name], env: env as Record<string, string>, stderr: "pipe" }));
     return async (operation: string, input: any) => {
       const result = await client.callTool({ name: operation, arguments: input });
-      return JSON.parse((result.content as any[])[0].text);
+      try { return JSON.parse((result.content as any[])[0].text); }
+      catch { return result; }
     };
   }
   async function task(operation: string, input: any, name = "test", selectedRoot = project) {
@@ -63,13 +64,13 @@ test("CLI and MCP preserve exact task contracts and checkpoints across restart",
   const input = createInput();
   const saved = await f.task("create", input);
   expect(saved.error).toBeUndefined();
-  expect(saved.value.task).toEqual({ id: input.taskId, revision: 1, state: "todo", contractRevision: 1, contract });
+  expect(saved.value.task).toEqual({ id: input.taskId, revision: 1, state: "todo", contractRevision: 1, contract, source: null, approval: null });
   expect(saved.value.checkpoint.content).toEqual(checkpoint);
   f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
   const mcp = await f.mcp();
   expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(saved);
   const next = { ...checkpoint, progress: "Verified persistence.", evidence: ["A fresh process read the exact content."] };
-  const updated = await mcp("task_save", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: next });
+  const updated = await mcp("task_save", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: next });
   expect(updated.error).toBeUndefined();
   expect(updated.value.task.revision).toBe(2);
   expect(updated.value.task.contract).toEqual(contract);
@@ -82,7 +83,7 @@ test("retries preserve the original result and reject changed payloads without a
   const created = await f.task("create", input);
   expect(await f.task("create", input)).toEqual(created);
   const mcp = await f.mcp();
-  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "Saved a second checkpoint." } };
+  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, progress: "Saved a second checkpoint." } };
   const saved = await mcp("task_save", { root: f.project, ...update });
   expect(saved.value.checkpointCount).toBe(2);
   expect(await f.task("save", { ...update, checkpoint: { ...checkpoint, progress: "Changed under the same key." } })).toMatchObject({ error: { code: "RETRY_CONFLICT" } });
@@ -99,13 +100,13 @@ test("invalid checkpoints and workflow shortcuts leave task state unchanged", as
   const saved = await f.task("create", input);
   for (const field of Object.keys(checkpoint)) {
     const incomplete: any = { ...checkpoint }; delete incomplete[field];
-    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: incomplete })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
+    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: incomplete })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
   }
   for (const change of [{ nextAction: null }, { progress: " " }, { blockers: [{ reason: "Waiting." }] }, { repositoryState: null }, { evidence: null }]) {
-    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, ...change } })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
+    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, ...change } })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
   }
   for (const extra of [{ state: "done" }, { state: "in-progress" }, { approval: "Approved." }, { contract: { ...contract, goal: "Replace requirements." } }]) {
-    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint, ...extra })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
+    expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint, ...extra })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
   }
   expect(await f.task("read", { taskId: input.taskId })).toEqual(saved);
 });
@@ -113,7 +114,7 @@ test("invalid checkpoints and workflow shortcuts leave task state unchanged", as
 test("overlapping CLI and MCP saves reject stale revisions with a specific error", async () => {
   const f = await fixture(); const input = createInput(); await f.task("create", input);
   const mcp = await f.mcp();
-  const first = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "CLI update." } };
+  const first = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, progress: "CLI update." } };
   const second = { ...first, retryKey: crypto.randomUUID(), checkpoint: { ...checkpoint, progress: "MCP update." } };
   const results = await Promise.all([f.task("save", first), mcp("task_save", { root: f.project, ...second })]);
   expect(results.filter(result => result.error).map(result => result.error.code)).toEqual(["STALE_REVISION"]);
@@ -142,19 +143,27 @@ test("tasks and retry keys remain independent across projects and instances", as
   expect(second.value.task.contract.goal).toBe("Other instance.");
   expect(await f.task("read", { taskId: input.taskId })).toEqual(first);
   expect(await f.task("create", input)).toEqual(first);
-  expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint }, "test", join(f.root, "missing"))).toHaveProperty("error");
+  expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint }, "test", join(f.root, "missing"))).toHaveProperty("error");
   expect(await f.task("read", { taskId: input.taskId })).toEqual(first);
 });
 
-test("death before commit preserves the prior task and retry commits one complete update", async () => {
+for (const operation of ["save", "approve", "revise"] as const) test(`death before commit preserves the prior task and retry commits one complete update (${operation})`, async () => {
   const f = await fixture(); const input = createInput();
-  const prior = await f.task("create", input);
+  let prior = await f.task("create", input);
+  const proposalId = crypto.randomUUID();
+  const revisedContract = { ...contract, goal: "Approved replacement after a crash." };
+  if (operation === "revise") {
+    await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Initial request." } });
+    prior = await f.task("propose", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: revisedContract });
+    expect(prior.error).toBeUndefined();
+  }
+  const command = operation === "save" ? "save" : "approve";
   f.daemon.kill("SIGKILL"); await f.daemon.exited;
   const trace = join(f.root, "before-commit.trace");
   const traced = await f.start("test", trace);
-  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "Atomic update." } };
+  const update = operation === "save" ? { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, progress: "Atomic update." } } : { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract: operation === "revise" ? revisedContract : contract, ...(operation === "revise" ? { proposalId, expectedRevision: 3 } : {}), approval: { source: "User approved before the interrupted request." } };
   const mcp = await f.mcp();
-  expect(await mcp("task_save", { root: f.project, ...update })).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
+  expect(await mcp(`task_${command}`, { root: f.project, ...update })).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
   await traced.exited;
   const syscalls = readFileSync(trace, "utf8");
   expect(syscalls).toMatch(/fsync\([^\n]*state\.sqlite-journal/);
@@ -162,17 +171,28 @@ test("death before commit preserves the prior task and retry commits one complet
   expect(syscalls).not.toMatch(/pwrite64\([^\n]*state\.sqlite>/);
   await f.start();
   expect(await f.task("read", { taskId: input.taskId })).toEqual(prior);
-  const retried = await f.task("save", update);
+  const retried = await f.task(command, update);
   expect(retried.error).toBeUndefined();
-  expect(retried.value.task.revision).toBe(2);
-  expect(retried.value.checkpoint.content).toEqual(update.checkpoint);
-  expect(retried.value.checkpointCount).toBe(2);
-  expect(await mcp("task_save", { root: f.project, ...update })).toEqual(retried);
+  expect(retried.value.task.revision).toBe(operation === "revise" ? 4 : 2);
+  expect(retried.value.checkpoint.content).toEqual("checkpoint" in update ? update.checkpoint : checkpoint);
+  expect(retried.value.task.approval).toEqual("approval" in update ? update.approval : null);
+  expect(retried.value.task.contract).toEqual(operation === "revise" ? revisedContract : contract);
+  expect(retried.value.task.contractRevision).toBe(operation === "revise" ? 2 : 1);
+  expect(retried.value.checkpointCount).toBe(operation === "save" ? 2 : 1);
+  expect(await mcp(`task_${command}`, { root: f.project, ...update })).toEqual(retried);
 });
 
-test("death after commit with a withheld response preserves the exact retry result", async () => {
+for (const operation of ["save", "approve", "revise"] as const) test(`death after commit with a withheld response preserves the exact retry result (${operation})`, async () => {
   const f = await fixture(); const input = createInput();
-  const prior = await f.task("create", input);
+  let prior = await f.task("create", input);
+  const proposalId = crypto.randomUUID();
+  const revisedContract = { ...contract, goal: "Approved replacement after a crash." };
+  if (operation === "revise") {
+    await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Initial request." } });
+    prior = await f.task("propose", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: revisedContract });
+    expect(prior.error).toBeUndefined();
+  }
+  const command = operation === "save" ? "save" : "approve";
   const path = join(prior.instance.directory, "daemon.sock");
   const upstreamPath = join(prior.instance.directory, "upstream.sock");
   renameSync(path, upstreamPath);
@@ -196,9 +216,9 @@ test("death after commit with a withheld response preserves the exact retry resu
     });
   });
   await new Promise<void>((resolve, reject) => { proxy.once("error", reject); proxy.listen(path, resolve); });
-  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "Committed before response loss." } };
+  const update = operation === "save" ? { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, progress: "Committed before response loss." } } : { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract: operation === "revise" ? revisedContract : contract, ...(operation === "revise" ? { proposalId, expectedRevision: 3 } : {}), approval: { source: "User approved before the interrupted request." } };
   try {
-    expect(await f.task("save", update)).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
+    expect(await f.task(command, update)).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
     expect(withheld.error).toBeUndefined();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -207,22 +227,33 @@ test("death after commit with a withheld response preserves the exact retry resu
   }
   await f.start(); const mcp = await f.mcp();
   expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(withheld);
-  expect(await mcp("task_save", { root: f.project, ...update })).toEqual(withheld);
-  expect(withheld.value.task.revision).toBe(2);
-  expect(withheld.value.checkpointCount).toBe(2);
-  expect(withheld.value.checkpoint.content).toEqual(update.checkpoint);
+  expect(await mcp(`task_${command}`, { root: f.project, ...update })).toEqual(withheld);
+  expect(withheld.value.task.revision).toBe(operation === "revise" ? 4 : 2);
+  expect(withheld.value.checkpointCount).toBe(operation === "save" ? 2 : 1);
+  expect(withheld.value.checkpoint.content).toEqual("checkpoint" in update ? update.checkpoint : checkpoint);
+  expect(withheld.value.task.approval).toEqual("approval" in update ? update.approval : null);
+  expect(withheld.value.task.contract).toEqual(operation === "revise" ? revisedContract : contract);
+  expect(withheld.value.task.contractRevision).toBe(operation === "revise" ? 2 : 1);
   expect(await f.task("read", { taskId: input.taskId })).toEqual(withheld);
 });
 
 
-test("death after database page writes rolls back the pending journal before reads", async () => {
+for (const operation of ["save", "approve", "revise"] as const) test(`death after database page writes rolls back the pending journal before reads (${operation})`, async () => {
   const f = await fixture(); const input = createInput();
-  const prior = await f.task("create", input);
+  let prior = await f.task("create", input);
+  const proposalId = crypto.randomUUID();
+  const revisedContract = { ...contract, goal: "Approved replacement after a crash." };
+  if (operation === "revise") {
+    await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Initial request." } });
+    prior = await f.task("propose", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: revisedContract });
+    expect(prior.error).toBeUndefined();
+  }
+  const command = operation === "save" ? "save" : "approve";
   f.daemon.kill("SIGKILL"); await f.daemon.exited;
   const trace = join(f.root, "late-before-commit.trace");
   const traced = await f.start("test", trace, 4);
-  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, checkpoint: { ...checkpoint, progress: "Interrupted after page writes." } };
-  expect(await f.task("save", update)).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
+  const update = operation === "save" ? { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, progress: "Interrupted after page writes." } } : { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract: operation === "revise" ? revisedContract : contract, ...(operation === "revise" ? { proposalId, expectedRevision: 3 } : {}), approval: { source: "User approved before the interrupted request." } };
+  expect(await f.task(command, update)).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
   await traced.exited;
   const syscalls = readFileSync(trace, "utf8");
   expect(syscalls).toMatch(/pwrite64\([^\n]*state\.sqlite>/);
@@ -231,10 +262,182 @@ test("death after database page writes rolls back the pending journal before rea
   await f.start();
   const mcp = await f.mcp();
   expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(prior);
-  const retried = await mcp("task_save", { root: f.project, ...update });
+  const retried = await mcp(`task_${command}`, { root: f.project, ...update });
   expect(retried.error).toBeUndefined();
-  expect(retried.value.task.revision).toBe(2);
-  expect(retried.value.checkpointCount).toBe(2);
-  expect(retried.value.checkpoint.content).toEqual(update.checkpoint);
-  expect(await f.task("save", update)).toEqual(retried);
+  expect(retried.value.task.revision).toBe(operation === "revise" ? 4 : 2);
+  expect(retried.value.checkpointCount).toBe(operation === "save" ? 2 : 1);
+  expect(retried.value.checkpoint.content).toEqual("checkpoint" in update ? update.checkpoint : checkpoint);
+  expect(retried.value.task.approval).toEqual("approval" in update ? update.approval : null);
+  expect(retried.value.task.contract).toEqual(operation === "revise" ? revisedContract : contract);
+  expect(retried.value.task.contractRevision).toBe(operation === "revise" ? 2 : 1);
+  expect(await f.task(command, update)).toEqual(retried);
+});
+
+test("initial approval binds exact content and source through CLI and MCP after restart", async () => {
+  const f = await fixture(); const input = createInput();
+  await f.task("create", input);
+  expect(await f.task("check", { taskId: input.taskId, expectedRevision: 1, expectedContractRevision: 1 })).toMatchObject({ error: { code: "APPROVAL_REQUIRED" } });
+  const approval = { source: 'Session request: "Implement the saved task."' };
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval };
+  const mcp = await f.mcp();
+  const approved = await mcp("task_approve", { root: f.project, ...request });
+  expect(approved.error).toBeUndefined();
+  expect(approved.value.task.approval).toEqual(approval);
+  expect(approved.value.task.contract).toEqual(contract);
+  expect(approved.value.task.contractRevision).toBe(1);
+  expect(approved.value.task.revision).toBe(2);
+  expect(approved.value.checkpointCount).toBe(1);
+  expect((await f.task("check", { taskId: input.taskId, expectedRevision: 2, expectedContractRevision: 1 })).error).toBeUndefined();
+  f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(approved);
+  expect(await f.task("approve", request)).toEqual(approved);
+});
+
+test("proposals preserve requirements until approval and retain offline contract revisions", async () => {
+  const f = await fixture(); const input = createInput();
+  const source = { reference: "https://github.com/example/project/issues/42", capturedAt: "2026-09-05T12:00:00Z" };
+  const initial = await f.task("create", { ...input, source });
+  expect(initial.error).toBeUndefined();
+  const approved = await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, source, approval: { source: "User request in session A." } });
+  expect(approved.error).toBeUndefined();
+  const mcp = await f.mcp();
+  const proposalId = crypto.randomUUID();
+  const changed = { ...contract, goal: "Read the saved task without GitHub access.", dependencyConditions: ["The storage verification has passed."] };
+  const laterSource = { ...source, capturedAt: "2026-09-05T13:00:00Z" };
+  const proposed = await mcp("task_propose", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: changed, source: laterSource });
+  expect(proposed.error).toBeUndefined();
+  expect(proposed.value.task.contract).toEqual(contract);
+  expect(proposed.value.task.contractRevision).toBe(1);
+  expect(proposed.value.checkpointCount).toBe(1);
+  expect((await f.task("proposal", { taskId: input.taskId, proposalId })).value.proposal).toEqual({ id: proposalId, baseContractRevision: 1, contract: changed, source: laterSource });
+  const approval = { source: 'User response in session B: "Approve this change."' };
+  const revised = await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 3, expectedContractRevision: 1, proposalId, contract: changed, source: laterSource, approval });
+  expect(revised.error).toBeUndefined();
+  expect(revised.value.task).toMatchObject({ revision: 4, contractRevision: 2, contract: changed, source: laterSource, approval });
+  expect(revised.value.checkpoint).toEqual(approved.value.checkpoint);
+  expect(revised.value.contractMismatch).toBe(true);
+  expect(await mcp("task_check", { root: f.project, taskId: input.taskId, expectedRevision: 4, expectedContractRevision: 2 })).toMatchObject({ error: { code: "CHECKPOINT_CONTRACT_MISMATCH" } });
+  const saved = await mcp("task_save", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 4, expectedContractRevision: 2, checkpoint: { ...checkpoint, progress: "Compared the checkpoint with the approved revision." } });
+  expect(saved.error).toBeUndefined();
+  expect(saved.value.contractMismatch).toBe(false);
+  expect(saved.value.checkpoint.contractRevision).toBe(2);
+  f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(saved);
+  expect((await mcp("task_contract", { root: f.project, taskId: input.taskId, contractRevision: 1 })).value.contract).toEqual({ revision: 1, content: contract, source, approval: { source: "User request in session A." } });
+  expect((await f.task("contract", { taskId: input.taskId, contractRevision: 2 })).value.contract).toEqual({ revision: 2, content: changed, source: laterSource, approval });
+});
+
+test("invalid approval evidence and changed content cannot alter prepared requirements", async () => {
+  const f = await fixture(); const input = createInput(); const prepared = await f.task("create", input);
+  const mcp = await f.mcp();
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Explicit user request." } };
+  for (const approval of [undefined, null, {}, { source: " " }, { source: "Request.", authenticated: true }]) {
+    expect(await f.task("approve", { ...request, approval })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
+    expect(await mcp("task_approve", { root: f.project, ...request, approval })).toMatchObject({ isError: true });
+  }
+  for (const change of [{ contract: { ...contract, goal: "Unapproved replacement." } }, { source: { reference: "Another source.", capturedAt: "2026-09-05T00:00:00Z" } }]) {
+    expect(await f.task("approve", { ...request, ...change })).toMatchObject({ error: { code: "APPROVAL_CONTENT_MISMATCH" } });
+    expect(await mcp("task_approve", { root: f.project, ...request, ...change })).toMatchObject({ error: { code: "APPROVAL_CONTENT_MISMATCH" } });
+  }
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(prepared);
+  const approved = await f.task("approve", request);
+  expect(approved.error).toBeUndefined();
+  expect(await mcp("task_approve", { root: f.project, ...request, approval: { source: "Changed evidence under the original key." } })).toMatchObject({ error: { code: "RETRY_CONFLICT" } });
+  expect(await f.task("approve", { ...request, retryKey: crypto.randomUUID(), expectedRevision: 2 })).toMatchObject({ error: { code: "ALREADY_APPROVED" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(approved);
+});
+
+test("overlapping approvals and stale proposals cannot replace a newer contract", async () => {
+  const f = await fixture(); const input = createInput(); await f.task("create", input);
+  const mcp = await f.mcp();
+  const initial = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Initial request." } };
+  const approvals = await Promise.all([f.task("approve", initial), mcp("task_approve", { root: f.project, ...initial, retryKey: crypto.randomUUID() })]);
+  expect(approvals.filter(result => result.error).map(result => result.error.code)).toEqual(["STALE_REVISION"]);
+  const proposal = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId: crypto.randomUUID(), contract: { ...contract, goal: "First proposed goal." } };
+  const proposed = await f.task("propose", proposal);
+  expect(proposed.error).toBeUndefined();
+  expect(await mcp("task_propose", { root: f.project, ...proposal })).toEqual(proposed);
+  expect(await f.task("propose", { ...proposal, contract: { ...contract, goal: "Changed proposal under the same retry key." } })).toMatchObject({ error: { code: "RETRY_CONFLICT" } });
+  const second = { ...proposal, retryKey: crypto.randomUUID(), expectedRevision: 3, proposalId: crypto.randomUUID(), contract: { ...contract, goal: "Second proposed goal." } };
+  expect((await mcp("task_propose", { root: f.project, ...second })).error).toBeUndefined();
+  const approve = { ...proposal, retryKey: crypto.randomUUID(), expectedRevision: 4, approval: { source: "Approved the first proposal." } };
+  const revised = await mcp("task_approve", { root: f.project, ...approve });
+  expect(revised.error).toBeUndefined();
+  expect(revised.value.task.contractRevision).toBe(2);
+  expect(await f.task("approve", { ...second, retryKey: crypto.randomUUID(), expectedRevision: 5, expectedContractRevision: 2, approval: { source: "Stale proposal approval." } })).toMatchObject({ error: { code: "STALE_CONTRACT_REVISION" } });
+  expect(await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 5, expectedContractRevision: 1, checkpoint })).toMatchObject({ error: { code: "STALE_CONTRACT_REVISION" } });
+  expect(await mcp("task_save", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 5, expectedContractRevision: 1, checkpoint })).toMatchObject({ error: { code: "STALE_CONTRACT_REVISION" } });
+  expect(await f.task("propose", { ...proposal, retryKey: crypto.randomUUID(), expectedRevision: 5, expectedContractRevision: 2 })).toMatchObject({ error: { code: "PROPOSAL_EXISTS" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(revised);
+  expect(await f.task("approve", approve)).toEqual(revised);
+  expect(await f.task("propose", proposal)).toEqual(proposed);
+});
+
+test("contract and proposal reads and approvals remain isolated by task project and instance", async () => {
+  const f = await fixture(); const input = createInput(); await f.task("create", input);
+  const approval = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Request for the first project." } };
+  const approved = await f.task("approve", approval);
+  const proposalId = crypto.randomUUID();
+  const proposed = await f.task("propose", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: { ...contract, goal: "First project only." } });
+  const otherRoot = join(f.root, "another-project"); mkdirSync(otherRoot);
+  await f.cli("project", "register", "--instance", "test", "--root", otherRoot);
+  expect((await f.task("create", input, "test", otherRoot)).error).toBeUndefined();
+  expect((await f.task("contract", { taskId: input.taskId, contractRevision: 1 }, "test", otherRoot)).value.contract.approval).toBeNull();
+  expect(await f.task("proposal", { taskId: input.taskId, proposalId }, "test", otherRoot)).toMatchObject({ error: { code: "PROPOSAL_NOT_FOUND" } });
+  expect(await f.task("approve", { ...approval, proposalId }, "test", otherRoot)).toMatchObject({ error: { code: "PROPOSAL_NOT_FOUND" } });
+  const otherApproved = await f.task("approve", { ...approval, approval: { source: "Request for the second project." } }, "test", otherRoot);
+  expect(otherApproved.value.task.approval.source).toBe("Request for the second project.");
+  await f.cli("instance", "create", "--instance", "second"); await f.start("second");
+  await f.cli("project", "register", "--instance", "second", "--root", f.project);
+  const mcp = await f.mcp("second");
+  expect(await mcp("task_contract", { root: f.project, taskId: input.taskId, contractRevision: 1 })).toMatchObject({ error: { code: "CONTRACT_NOT_FOUND" } });
+  expect(await mcp("task_proposal", { root: f.project, taskId: input.taskId, proposalId })).toMatchObject({ error: { code: "PROPOSAL_NOT_FOUND" } });
+  expect(await mcp("task_approve", { root: f.project, ...approval })).toMatchObject({ error: { code: "TASK_NOT_FOUND" } });
+  const otherTask = createInput(); await f.task("create", otherTask);
+  expect(await f.task("proposal", { taskId: otherTask.taskId, proposalId })).toMatchObject({ error: { code: "PROPOSAL_NOT_FOUND" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(proposed);
+  expect(await f.task("approve", approval)).toEqual(approved);
+});
+
+test("a rejected draft can be corrected by proposal without approving its original content", async () => {
+  const f = await fixture(); const input = createInput(); await f.task("create", input);
+  const proposal = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, proposalId: crypto.randomUUID(), contract: { ...contract, goal: "Corrected goal approved by the user." } };
+  const proposed = await f.task("propose", proposal);
+  expect(proposed.error).toBeUndefined();
+  expect(proposed.value.task.approval).toBeNull();
+  const mcp = await f.mcp();
+  expect(await mcp("task_check", { root: f.project, taskId: input.taskId, expectedRevision: 2, expectedContractRevision: 1 })).toMatchObject({ error: { code: "APPROVAL_REQUIRED" } });
+  const approved = await mcp("task_approve", { root: f.project, ...proposal, expectedRevision: 2, retryKey: crypto.randomUUID(), approval: { source: "User approved only the corrected goal." } });
+  expect(approved.error).toBeUndefined();
+  expect(approved.value.task.contractRevision).toBe(2);
+  expect(approved.value.task.contract).toEqual(proposal.contract);
+  expect(approved.value.contractMismatch).toBe(true);
+  expect((await f.task("contract", { taskId: input.taskId, contractRevision: 1 })).value.contract).toEqual({ revision: 1, content: contract, source: null, approval: null });
+});
+
+test("issue capture is self-contained and rejects incomplete source metadata without fetching", async () => {
+  const f = await fixture(); const input = createInput(); const mcp = await f.mcp();
+  for (const source of [{ reference: "Issue 42." }, { capturedAt: "2026-09-05T12:00:00Z" }, { reference: " ", capturedAt: "2026-09-05T12:00:00Z" }, { reference: "Issue 42.", capturedAt: "yesterday" }, { reference: "Issue 42.", capturedAt: "2026-09-05T12:00:00" }]) {
+    expect(await f.task("create", { ...input, source })).toMatchObject({ error: { code: "INVALID_TASK_INPUT" } });
+    expect(await mcp("task_create", { root: f.project, ...input, source })).toMatchObject({ isError: true });
+  }
+  let requests = 0;
+  const server = createServer(socket => {
+    requests++;
+    socket.end("HTTP/1.1 200 OK\r\nContent-Length: 24\r\nConnection: close\r\n\r\nLater unapproved wording");
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const port = (server.address() as { port: number }).port;
+  const source = { reference: `http://127.0.0.1:${port}/issues/42`, capturedAt: "2026-09-05T09:00:00-03:00" };
+  let approved: any;
+  try {
+    expect((await f.task("create", { ...input, source })).error).toBeUndefined();
+    approved = await mcp("task_approve", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, source, approval: { source: "User request captured with the issue." } });
+    expect(approved.error).toBeUndefined();
+    expect(await f.task("read", { taskId: input.taskId })).toEqual(approved);
+    expect(requests).toBe(0);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
+  expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(approved);
+  expect((await f.task("contract", { taskId: input.taskId, contractRevision: 1 })).value.contract).toEqual({ revision: 1, content: contract, source, approval: { source: "User request captured with the issue." } });
 });

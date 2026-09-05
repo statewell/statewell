@@ -151,7 +151,7 @@ A database deadline stops the worker and fails pending requests.
 Stop and restart the daemon before further database operations.
 Automatic startup does not replace a live daemon whose database worker failed.
 An interrupted response or worker failure can leave a write result uncertain. Inspect the project before repeating registration.
-Task saves and logical retry keys belong to later tickets.
+Task mutations support logical retry keys, as described below.
 
 MCP input frames have a 16384-byte limit. MCP output frames have a 65536-byte limit.
 MCP permits at most 16 pending output writes, each with a one-second deadline.
@@ -160,12 +160,12 @@ CLI operation failures exit with code 1 and return a JavaScript Object Notation 
 Successful CLI operations return JSON on stdout.
 
 These bounds apply to this initial interface. They do not promise database progress during a slow operation.
-No backup, restoration, migration, memory, inference, or task workflow is implemented here.
+Backup, restoration, migration, memory, inference, and task state transitions are unavailable.
 
 ## Task preparation and checkpoints
 
 Task storage is available through the command-line interface (CLI) and Model Context Protocol (MCP).
-Tasks remain in `todo`. Approval, contract changes, and workflow transitions are not available in this version.
+Tasks remain in `todo`. Recorded approval and contract revisions are available. Workflow transitions remain unavailable.
 A saved checkpoint does not authorize implementation or certify evidence.
 
 Use a new disposable instance for this version.
@@ -235,6 +235,7 @@ Use `task save` with a file that contains these fields:
 - `taskId`: The saved task identifier.
 - `retryKey`: A new key for this change.
 - `expectedRevision`: The task revision that you read.
+- `expectedContractRevision`: The current contract revision that you read.
 - `checkpoint`: All required checkpoint fields.
 
 ```sh
@@ -242,8 +243,8 @@ statewell task save --instance test --root /absolute/project --input /absolute/c
 ```
 
 Each successful save increases the task revision and adds one checkpoint.
-The initial contract remains unchanged at contract revision 1.
-The response includes the task, latest checkpoint, checkpoint count, project, and instance.
+A checkpoint save leaves the current contract and its approval unchanged.
+The response includes the task, latest checkpoint, revision mismatch flag, checkpoint count, project, and instance.
 Earlier checkpoints remain stored. History selection is not available through these commands.
 
 Statewell commits the task revision, checkpoint, and retry response in one SQLite transaction.
@@ -277,7 +278,7 @@ Statewell retries do not make external actions execute exactly once.
 
 ### MCP operations
 
-Use `task_create`, `task_save`, and `task_read` through the selected MCP instance.
+Use the task tools listed below through the selected MCP instance.
 Their arguments contain the same fields as CLI input, plus `root` and optional `projectId`.
 The shared task validation and transaction rules apply to both interfaces.
 Protocol schema errors can use MCP error formatting.
@@ -297,3 +298,147 @@ A second pre-commit check kills the daemon after database page writes and verifi
 The after-commit check withholds the socket response, kills the daemon, and then disconnects the caller.
 All crash checks read and retry through CLI or MCP after restart.
 No application fault flag or direct database query determines the saved result.
+
+## Contract approval and revisions
+
+Issue #6 adds recorded approval, separate proposals, and exact contract revision reads.
+The initial contract is revision 1, with `approval: null`.
+Preparation and checkpoint saves do not approve that contract.
+
+Approval is reported audit evidence. Statewell trusts the local agent to report the maintainer's approval honestly.
+It does not authenticate the maintainer or certify evidence truth.
+An explicit user request can supply the approval source. Do not request equivalent confirmation again.
+
+### Record initial approval
+
+Use `task approve` with these input fields:
+
+- `taskId`: The prepared task identifier.
+- `retryKey`: A new key for this approval.
+- `expectedRevision`: The current task revision.
+- `expectedContractRevision`: The current contract revision.
+- `contract`: The exact saved contract object.
+- `source`: The exact saved source object, or `null` when absent.
+- `approval`: An object with nonempty `source` text that identifies the actual approval.
+
+For example, `approval` can contain this reported user request:
+
+```json
+{"source":"Session request: Implement the saved task under these requirements."}
+```
+
+Supply the complete request in a regular JSON file:
+
+```sh
+statewell task approve --instance test --root /absolute/project --input /absolute/approval.json
+```
+
+Initial approval preserves contract revision 1 and increases the task revision.
+It adds no checkpoint. A different contract or source returns `APPROVAL_CONTENT_MISMATCH`.
+A missing approval source is invalid. A second initial approval with a new key returns `ALREADY_APPROVED`.
+Use the original key to retrieve an uncertain approval result.
+
+### Capture issue requirements
+
+For requirements from an issue, supply a self-contained `contract` and its `source` during creation or proposal.
+The source requires a reference and an ISO 8601 capture time with a timezone:
+
+```json
+{
+  "reference": "https://github.com/example/project/issues/42",
+  "capturedAt": "2026-09-05T12:00:00Z"
+}
+```
+
+ISO 8601 defines the date and time format used here.
+Statewell stores the submitted capture time. It does not verify when the source was read.
+For requirements without an external source, omit `source` or supply `null`.
+For issue-derived requirements, the reporting agent must include the source and capture time.
+Statewell cannot infer an omitted issue reference from ordinary contract text.
+
+Statewell does not fetch the reference. It needs no GitHub access to approve, read, or check saved requirements.
+Later issue edits cannot change a saved contract. Submit a separate proposal and record approval to adopt those edits.
+Dependency conditions remain contract text. No task graph or scheduler is provided.
+
+### Propose and approve a change
+
+Use `task propose` with `taskId`, `retryKey`, both expected revisions, `proposalId`, `contract`, and optional `source`.
+Use a new universally unique identifier (UUID) for `proposalId` and include the complete proposed contract.
+A proposal increases the task revision. It leaves the current contract, approval, and latest checkpoint unchanged.
+Proposals can correct an unapproved draft. Proposal creation does not require approval of rejected content.
+
+```sh
+statewell task propose --instance test --root /absolute/project --input /absolute/proposal.json
+```
+
+To adopt a proposal, use `task approve` with its `proposalId` in addition to the approval fields above.
+The contract and source must match the saved proposal exactly.
+Approval creates the next contract revision and increases the task revision.
+Earlier contract content, source records, and approval evidence remain available.
+The proposal also remains available with its original base contract revision.
+
+A proposal based on an older contract returns `STALE_CONTRACT_REVISION` when approved against a newer contract.
+Prepare a new proposal after comparing the current requirements.
+A reused proposal identifier with a new retry key returns `PROPOSAL_EXISTS`.
+Progress updates cannot contain contract or approval fields.
+
+### Check the contract before implementation
+
+Before implementation, call `task check` with `taskId`, `expectedRevision`, and `expectedContractRevision`.
+This read-only operation checks recorded approval and checkpoint agreement. It does not start or execute work.
+
+```sh
+statewell task check --instance test --root /absolute/project --input /absolute/check.json
+```
+
+Without approval, the check returns `APPROVAL_REQUIRED`.
+After a contract change, `task read` returns the latest checkpoint with `contractMismatch: true`.
+The checkpoint retains its original `contractRevision`. It is not replaced by an earlier matching checkpoint.
+The check returns `CHECKPOINT_CONTRACT_MISMATCH` until a new checkpoint records reconciliation with the current contract.
+Compare the checkpoint with the new requirements before saving that checkpoint.
+Statewell validates the submitted revision, not the truth of the reported comparison.
+
+A stale task revision returns `STALE_REVISION` first.
+With the current task revision, a stale contract revision returns `STALE_CONTRACT_REVISION`.
+Saves, proposals, approvals, and checks require both expected revisions.
+A successful check returns the current task and checkpoint. It is not a durable permission token.
+Later changes can invalidate that result.
+
+Check actual repository state, dependencies, blockers, and uncertain effects before work.
+Recorded approval does not authorize unrelated external actions.
+This check covers contract controls only. Workflow transitions and their additional controls belong to issue #7.
+
+### Read exact records
+
+Use `task contract` with `taskId` and `contractRevision` to read one retained contract.
+Its `value.contract` contains `revision`, `content`, `source`, and `approval`.
+Use `task proposal` with `taskId` and `proposalId` to read one proposal.
+Its `value.proposal` contains `id`, `baseContractRevision`, `contract`, and `source`.
+Both operations use the selected project and instance. Neither changes the current task.
+
+```sh
+statewell task contract --instance test --root /absolute/project --input /absolute/contract-reference.json
+statewell task proposal --instance test --root /absolute/project --input /absolute/proposal-reference.json
+```
+
+Missing records return `CONTRACT_NOT_FOUND` or `PROPOSAL_NOT_FOUND`.
+Record identifiers and revision numbers must be retained by the caller. Listing and checkpoint history selection remain separate work.
+Reads do not return an unbounded contract history.
+
+### Task interface mapping
+
+| CLI operation | MCP tool |
+| --- | --- |
+| `task create` | `task_create` |
+| `task save` | `task_save` |
+| `task read` | `task_read` |
+| `task approve` | `task_approve` |
+| `task propose` | `task_propose` |
+| `task check` | `task_check` |
+| `task contract` | `task_contract` |
+| `task proposal` | `task_proposal` |
+
+All mutations commit their state change and retry result together.
+Approval and proposal operations preserve the latest checkpoint; only creation and checkpoint saves add a checkpoint.
+A retry returns its original result before stale-revision checks, even after later approvals or saves.
+The current schema version is 2. Earlier stores remain unchanged and require their earlier executable.
