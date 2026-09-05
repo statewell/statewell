@@ -1,6 +1,6 @@
 # Instance and project access
 
-This implementation covers issue #3 on Linux x64.
+This implementation covers instance and project access from issue #3 and daemon lifecycle from issue #4 on Linux x64.
 It provides a command-line interface (CLI) and the initial project access for the minimum viable product (MVP).
 It requires Bun 1.4.2 for development. The compiled executable contains Bun and the database worker.
 The executable does not require a separate Bun installation.
@@ -18,6 +18,7 @@ bash scripts/package-smoke.sh
 
 Tests create disposable data in `/dev/shm`, outside repositories.
 Tests require permission to create local Unix sockets and run Git.
+The worker-failure test also requires `/usr/bin/python3` for its controlled external process.
 The package check installs a local archive with an isolated npm cache and no network dependency.
 The package is private. These commands do not publish it.
 
@@ -31,25 +32,56 @@ Use data directories owned by your user with mode `0700`.
 ```sh
 export STATEWELL_HOME="$HOME/.local/share/statewell"
 ./dist/statewell instance create
-./dist/statewell instance start
+./dist/statewell instance inspect
 ```
 
 Explicit creation sets up `main`. Queries do not create a database or registration.
-Startup runs in the foreground. Use another terminal for client commands.
+A CLI request can automatically start the existing `main` instance when its socket is absent or refuses the connection.
+Model Context Protocol (MCP) tool requests use the same rule. Opening an MCP connection does not create an instance.
+Automatic startup uses the registered identity and data directory.
+Concurrent callers can connect to the daemon that completes startup first.
+An unknown `main` returns `SETUP_REQUIRED`. Run explicit creation before another request.
+
+Explicit startup runs in the foreground unless you supply `--detached`.
+Use another terminal for client commands when the daemon runs in the foreground.
 Terminate the foreground process with Ctrl+C or SIGTERM.
-Automatic startup, detached lifecycle commands, and registration removal belong to issue #4.
 
 Use an explicit name for an isolated instance:
 
 ```sh
 ./dist/statewell instance create --instance test --data-dir "$HOME/.local/share/statewell-test"
-./dist/statewell instance start --instance test
+./dist/statewell instance start --instance test --detached
 ```
 
 Repeated creation preserves the registered identity and data.
 If you omit `--data-dir`, repeated creation uses the registered directory.
 A different explicit directory returns `DIRECTORY_CONFLICT`.
-An unavailable selected instance returns an error. Clients do not select another instance or open SQLite directly.
+A stopped instance other than `main` requires explicit startup.
+Clients return an error for that stopped instance. They do not select another instance or open SQLite directly.
+
+## Stop an instance and remove its registration
+
+Stop the selected daemon:
+
+```sh
+./dist/statewell instance stop --instance test
+```
+
+Stop preserves the registration, instance identity, database, and project records.
+Repeating stop for a registered stopped instance returns a stopped result.
+A later request can automatically start `main` again. Other instances still require explicit startup.
+
+Remove the selected registration:
+
+```sh
+./dist/statewell instance remove --instance test
+```
+
+Removal first stops the selected daemon, then removes its local registration.
+Removal preserves the data directory and its database. It does not remove project markers.
+Requests for the removed registration fail until explicit setup registers an instance with that name.
+An unknown name returns `SETUP_REQUIRED` for stop and removal.
+An identity change returns an error instead of removing the registration.
 
 ## Select and register a project
 
@@ -82,7 +114,7 @@ An incompatible existing database is rejected. This version does not migrate it.
 
 ## MCP access
 
-Start a Model Context Protocol (MCP) stdio process with:
+Start an MCP stdio process with:
 
 ```sh
 ./dist/statewell mcp --instance test
@@ -94,11 +126,14 @@ Available tools are `instance_inspect`, `project_resolve`, `project_register`, a
 Project tools accept `root`; registration and inspection also accept an optional expected `projectId`.
 MCP does not use its process directory as a workspace default.
 A persistent MCP client pins the first selected instance identity.
-Identity replacement returns `IDENTITY_CHANGED`. Restart the MCP connection after explicit instance selection.
+A daemon restart with the same identity preserves this connection's instance selection.
+An identity or data-directory replacement returns `IDENTITY_CHANGED`.
+Inspect the selected registration before reconnecting. Restart the MCP connection after explicit instance selection.
+A reused name does not establish continuity with the earlier instance.
 
 ## Bounds and failure results
 
-Each instance has one SQLite worker and one foreground daemon.
+Each running instance has one SQLite worker and one daemon, either in the foreground or detached.
 SQLite has exclusive ownership. A separate kernel-owned socket protects endpoint removal and binding.
 The client socket is private to the instance owner.
 A regular file or live foreign socket at the endpoint prevents startup.
@@ -106,8 +141,15 @@ A regular file or live foreign socket at the endpoint prevents startup.
 The daemon accepts at most 16 connections and four pending database requests.
 A request can contain at most 16384 bytes, including its newline.
 Database requests have a two-second deadline. Idle client connections expire after three seconds.
-The client response limit is 65536 bytes. Its timeout is four seconds.
-A database deadline stops the worker and fails pending requests. Restart the foreground daemon before further database operations.
+The client response limit is 65536 bytes. Its absolute deadline is four seconds. Incoming bytes do not extend this deadline.
+Detached and automatic startup have a five-second startup deadline.
+A failed startup can take one additional second to terminate its child process.
+The daemon permits three seconds for shutdown before it forces process exit.
+This deadline does not establish termination of every external descendant process.
+
+A database deadline stops the worker and fails pending requests.
+Stop and restart the daemon before further database operations.
+Automatic startup does not replace a live daemon whose database worker failed.
 An interrupted response or worker failure can leave a write result uncertain. Inspect the project before repeating registration.
 Task saves and logical retry keys belong to later tickets.
 

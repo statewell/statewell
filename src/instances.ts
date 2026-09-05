@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { StatewellError } from "./errors.ts";
@@ -29,3 +29,10 @@ export function requirePrivateDirectory(directory: string) {
 }
 
 export function endpoint(instance: Instance) { return join(instance.directory, "daemon.sock"); }
+
+export function lifecycleKey() { return `setup:${realpathSync(stateHome())}`; }
+export function requireSameInstance(expected: Instance) {
+  const current = loadInstance(expected.name);
+  if (current.id !== expected.id || current.directory !== expected.directory) throw new StatewellError("IDENTITY_CHANGED", "The instance identity changed. Reconnect explicitly.");
+  return current;
+}

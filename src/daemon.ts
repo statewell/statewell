@@ -1,9 +1,9 @@
 import { createServer, createConnection, type Socket } from "node:net";
 import { chmodSync, lstatSync, unlinkSync, realpathSync } from "node:fs";
 import { openDatabase } from "./database.ts";
-import { claimOwnership } from "./ownership.ts";
+import { claimOwnership, waitForOwnership } from "./ownership.ts";
 import { failure, StatewellError } from "./errors.ts";
-import { endpoint, requirePrivateDirectory, type Instance } from "./instances.ts";
+import { endpoint, requirePrivateDirectory, lifecycleKey, requireSameInstance, type Instance } from "./instances.ts";
 
 async function removeStaleEndpoint(path: string) {
   let before;
@@ -23,6 +23,11 @@ async function removeStaleEndpoint(path: string) {
   unlinkSync(path);
 }
 export async function startDaemon(instance: Instance) {
+  const unlock = await waitForOwnership(lifecycleKey());
+  try { requireSameInstance(instance); await runDaemon(instance); }
+  finally { unlock(); }
+}
+async function runDaemon(instance: Instance) {
   if (realpathSync(instance.directory) !== instance.directory) throw new StatewellError("DIRECTORY_CONFLICT", "The instance directory changed.");
   requirePrivateDirectory(instance.directory);
   const database = await openDatabase(instance.directory);
@@ -52,7 +57,12 @@ export async function startDaemon(instance: Instance) {
         dispatched = true;
         try {
           const request = JSON.parse(buffer.subarray(0, end).toString());
+          if (stopping) throw new StatewellError("INSTANCE_STOPPING", "The instance is stopping. Reconnect after shutdown.");
           if (request.identity !== instance.id) throw new StatewellError("IDENTITY_CHANGED", "The instance identity changed. Reconnect explicitly.");
+          if (request.operation === "instance.stop") {
+            socket.end(JSON.stringify({ instance, value: { stopping: true } }) + "\n", () => void stop());
+            return;
+          }
           const value = await database.request(request.operation, request.input);
           socket.end(JSON.stringify({ instance, value }) + "\n");
         } catch (error) { socket.end(JSON.stringify(failure(error)) + "\n"); }
@@ -65,9 +75,10 @@ export async function startDaemon(instance: Instance) {
     let stopping = false;
     const stop = async () => {
       if (stopping) return; stopping = true;
+      const deadline = setTimeout(() => process.exit(1), 3000);
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
-      await database.close(); release!();
+      await database.close(); release!(); clearTimeout(deadline);
     };
     process.once("SIGTERM", () => void stop());
     process.once("SIGINT", () => void stop());

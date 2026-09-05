@@ -7,3 +7,14 @@ export function claimOwnership(key: string) {
     return () => { server.stop(true); };
   } catch { throw new StatewellError("INSTANCE_BUSY", "Another process owns this instance or endpoint."); }
 }
+
+export async function waitForOwnership(key: string, milliseconds = 5000) {
+  const deadline = Date.now() + milliseconds;
+  do {
+    try { return claimOwnership(key); }
+    catch (error) {
+      if (Date.now() >= deadline) throw error;
+      await Bun.sleep(25);
+    }
+  } while (true);
+}
