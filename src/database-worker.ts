@@ -25,7 +25,7 @@ try {
         const header = Buffer.alloc(100);
         if (!file.isFile() || file.nlink !== 1 || readSync(fd, header, 0, 100, 0) !== 100 ||
             header.subarray(0, 16).toString() !== "SQLite format 3\0" ||
-            header.readUInt32BE(60) !== 2 || header.readUInt32BE(68) !== 0x5354574c) throw new Error();
+            header.readUInt32BE(60) !== 3 || header.readUInt32BE(68) !== 0x5354574c) throw new Error();
       } finally { closeSync(fd); }
       // SQLite must roll back a pending journal before schema inspection.
       inspection = new Database(path, { create: false, readwrite: true, strict: true });
@@ -33,9 +33,9 @@ try {
       if (identity.length !== 1 || !/^[0-9a-f-]{36}$/.test(identity[0]!.id)) throw new Error();
       inspection.query("SELECT root, id FROM projects LIMIT 0").all();
       const version = inspection.query("PRAGMA user_version").get() as { user_version: number };
-      if (version.user_version !== 2) throw new Error();
-      inspection.query("SELECT project_id, id, revision, contract_revision FROM tasks LIMIT 0").all();
-      inspection.query("SELECT project_id, task_id, revision, contract_revision, content FROM checkpoints LIMIT 0").all();
+      if (version.user_version !== 3) throw new Error();
+      inspection.query("SELECT project_id, id, revision, contract_revision, state FROM tasks LIMIT 0").all();
+      inspection.query("SELECT project_id, task_id, revision, contract_revision, content, transition FROM checkpoints LIMIT 0").all();
       inspection.query("SELECT project_id, key, payload, response FROM task_retries LIMIT 0").all();
       inspection.query("SELECT project_id, task_id, revision, content, source, approval FROM contracts LIMIT 0").all();
       inspection.query("SELECT project_id, task_id, id, base_revision, content, source FROM proposals LIMIT 0").all();
@@ -53,7 +53,7 @@ try {
     db.transaction(() => {
       db.exec("CREATE TABLE instance (id TEXT PRIMARY KEY); CREATE TABLE projects (root TEXT PRIMARY KEY, id TEXT NOT NULL);");
       createTaskTables(db);
-      db.exec("PRAGMA user_version=2; PRAGMA application_id=1398036300");
+      db.exec("PRAGMA user_version=3; PRAGMA application_id=1398036300");
       db.query("INSERT INTO instance VALUES (?)").run(crypto.randomUUID());
     })();
   }

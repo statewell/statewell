@@ -160,12 +160,12 @@ CLI operation failures exit with code 1 and return a JavaScript Object Notation 
 Successful CLI operations return JSON on stdout.
 
 These bounds apply to this initial interface. They do not promise database progress during a slow operation.
-Backup, restoration, migration, memory, inference, and task state transitions are unavailable.
+Backup, restoration, migration, memory, and inference are unavailable.
 
 ## Task preparation and checkpoints
 
 Task storage is available through the command-line interface (CLI) and Model Context Protocol (MCP).
-Tasks remain in `todo`. Recorded approval and contract revisions are available. Workflow transitions remain unavailable.
+Tasks start in `todo`. Recorded approval, contract revisions, and workflow transitions are available.
 A saved checkpoint does not authorize implementation or certify evidence.
 
 Use a new disposable instance for this version.
@@ -243,7 +243,7 @@ statewell task save --instance test --root /absolute/project --input /absolute/c
 ```
 
 Each successful save increases the task revision and adds one checkpoint.
-A checkpoint save leaves the current contract and its approval unchanged.
+A checkpoint save leaves the workflow state, current contract, and its approval unchanged.
 The response includes the task, latest checkpoint, revision mismatch flag, checkpoint count, project, and instance.
 Earlier checkpoints remain stored. History selection is not available through these commands.
 
@@ -406,7 +406,7 @@ Later changes can invalidate that result.
 
 Check actual repository state, dependencies, blockers, and uncertain effects before work.
 Recorded approval does not authorize unrelated external actions.
-This check covers contract controls only. Workflow transitions and their additional controls belong to issue #7.
+This check covers contract controls only. Use the workflow transition controls below before starting work.
 
 ### Read exact records
 
@@ -431,6 +431,7 @@ Reads do not return an unbounded contract history.
 | --- | --- |
 | `task create` | `task_create` |
 | `task save` | `task_save` |
+| `task transition` | `task_transition` |
 | `task read` | `task_read` |
 | `task approve` | `task_approve` |
 | `task propose` | `task_propose` |
@@ -439,6 +440,127 @@ Reads do not return an unbounded contract history.
 | `task proposal` | `task_proposal` |
 
 All mutations commit their state change and retry result together.
-Approval and proposal operations preserve the latest checkpoint; only creation and checkpoint saves add a checkpoint.
+Approval and proposal operations preserve the latest checkpoint; creation, checkpoint saves, and state transitions add a checkpoint.
 A retry returns its original result before stale-revision checks, even after later approvals or saves.
-The current schema version is 2. Earlier stores remain unchanged and require their earlier executable.
+The current schema version is 3. Earlier stores remain unchanged and require their earlier executable.
+
+
+## Task progress and completion
+
+Issue #7 adds `task transition` and the `task_transition` MCP tool.
+A transition changes workflow state and saves its checkpoint and retry result in one transaction.
+Session termination does not change workflow state.
+Use `task save` for a checkpoint update that keeps the same state.
+
+| Current state | Permitted different state |
+| --- | --- |
+| `todo` | `in-progress`, `blocked`, `cancelled` |
+| `in-progress` | `blocked`, `done`, `cancelled` |
+| `blocked` | `todo`, `cancelled` |
+| `done` | `todo` |
+| `cancelled` | `todo` |
+
+Every other transition returns `INVALID_TRANSITION`, including a transition to the current state.
+Each transition requires `taskId`, `retryKey`, `expectedRevision`, `expectedContractRevision`, `state`, and a complete `checkpoint`.
+Supply the additional evidence fields required below. Evidence fields for another transition are rejected.
+
+```sh
+statewell task transition --instance test --root /absolute/project --input /absolute/transition.json
+```
+
+MCP uses the same fields, with `root` and optional `projectId`.
+All text must be nonempty. Omitted required fields and unknown fields are rejected.
+The task revision and checkpoint count each increase by one after a successful transition.
+Stale requests and retries follow the same rules as checkpoint saves.
+
+### Start implementation
+
+The transition from `todo` to `in-progress` requires recorded contract approval.
+After a contract change, reconcile the latest checkpoint before starting implementation.
+A transition cannot perform that reconciliation and start work in the same request.
+
+For each contract dependency condition, supply one `dependencyEvidence` entry:
+
+```json
+{"conditionIndex":0,"evidence":"The maintainer accepted the dependency in its completion report."}
+```
+
+Indices start at zero and refer to the current contract array.
+Duplicate, missing, or out-of-range indices return `DEPENDENCY_EVIDENCE_REQUIRED`.
+Omit the field or use an empty array when the contract has no dependency conditions.
+Statewell records the evidence without inspecting another ticket or running a scheduler.
+
+### Record and resolve blockers
+
+A blocked checkpoint requires at least one blocker with a `reason` and `continuationCondition`.
+Its `nextAction` must describe the action needed to resolve the blocker.
+Statewell requires nonempty text. The reporting agent must check that the text describes the actual resolution action.
+A blocked checkpoint save preserves existing blockers in their current order. It can append blockers.
+It cannot remove, replace, or reorder them to bypass resolution evidence.
+
+To return from `blocked` to `todo`, supply `blockerResolutions` for every blocker in the latest checkpoint:
+
+```json
+[{"blockerIndex":0,"evidence":"The test service started and returned the expected response."}]
+```
+
+Indices start at zero. Each index must occur exactly once.
+The new checkpoint must have an empty `blockers` array and a nonempty next action.
+Missing resolution evidence returns `RESOLUTION_REQUIRED`.
+Resolution records do not certify that the condition is satisfied.
+
+### Complete work
+
+Only `in-progress` can transition to `done`.
+Completion requires approval of the current contract and a checkpoint reconciled with that contract.
+Supply one `acceptanceEvidence` entry for each current acceptance check:
+
+```json
+[{"checkIndex":0,"status":"passed","evidence":"The fresh process read the exact saved task."}]
+```
+
+Indices start at zero. Each check must occur exactly once, with nonempty evidence and `status: "passed"`.
+Missing, duplicate, out-of-range, failed, or unverified entries return `COMPLETION_EVIDENCE_REQUIRED`.
+
+Every blocker affects completion unless its checkpoint entry explicitly contains `affectsCompletion: false`.
+A relevant unresolved blocker returns `UNRESOLVED_BLOCKER`.
+The reporting agent must assess relevance honestly. Statewell does not independently verify that assessment.
+Uncertain external effects still require actual inspection and a blocker when the outcome prevents completion.
+
+Set `completionApprovalRequired: true` in the task contract when completion needs human approval.
+Omission or `false` means that no separate completion approval is required.
+This field is part of the exact approved contract. Progress updates cannot change it.
+The reporting agent must encode any required completion approval in this field before contract approval.
+Statewell cannot infer an omitted approval requirement from ordinary contract text.
+
+When required, supply `approval: {"source":"The maintainer accepted the completion results."}` in the transition request.
+Initial contract approval does not substitute for required completion approval.
+The saved transition binds this reported approval to the current contract revision, checkpoint, and acceptance evidence.
+Statewell validates the evidence fields. It does not run the checks, authenticate the maintainer, or certify success independently.
+
+### Cancel or reopen work
+
+Cancellation requires a nonempty `reason` and an `approval` object with nonempty `source` text.
+For example, the source can identify an explicit maintainer request to cancel the task.
+The resulting state is `cancelled`. It does not indicate successful completion.
+
+To return from `done` to `todo`, supply a nonempty `reason` and a nonempty `failureEvidence` array of nonempty text.
+To return from `cancelled` to `todo`, supply approval that identifies the maintainer's request to resume work.
+Cancellation approval does not substitute for resumption approval.
+Neither reopening operation changes the contract or its approval.
+A resumed unapproved task still needs initial contract approval before implementation.
+
+### Read retained transition evidence
+
+`checkpoint.transition` contains the transition recorded with that checkpoint, or `null` for ordinary checkpoint saves.
+`task.lastTransition` contains the latest transition and its `checkpointRevision`, or `null` before the first transition.
+It preserves the reason, approval, and evidence after later checkpoint saves.
+Transition records include the prior state, resulting state, and contract revision.
+Earlier transitions remain stored with their checkpoints. History selection remains separate work.
+
+Done and cancelled checkpoints permit an explicit `nextAction: null`.
+Other states require a nonempty next action, including after reopening.
+A done checkpoint save cannot introduce a relevant unresolved blocker.
+If an approved contract revision changes completed requirements, ordinary saves cannot replace the earlier completion evidence.
+Reopen with failure evidence and a reason before addressing the changed requirements.
+Contract approval alone does not change workflow state.
