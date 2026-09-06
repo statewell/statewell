@@ -40,7 +40,10 @@ The initial full run passed 79 tests and failed one lifecycle expectation.
 Six concurrent reads can return the documented `OVERLOADED` result from the four-request queue.
 The lifecycle expectation now includes that result and retains the post-removal setup check.
 The full rerun passed 80 tests with 1232 assertions in 98.71 seconds.
-The later duplicate-outcome regression passed separately. Final source and installed-package results remain pending.
+The later duplicate-outcome regression passed separately. Final source suite: 81 passed, 0 failed, 1237 assertions, 99.53 seconds.
+Offline-installed package: 81 passed, 0 failed, 1237 assertions, 112.31 seconds.
+The archive contained exactly six permitted regular files. The installed executable matched the build.
+Compiled help and local documentation links passed.
 
 | Acceptance check | Observable evidence |
 | --- | --- |
@@ -65,12 +68,12 @@ Acknowledged continuation also survives process restart and returns its original
 
 A disposable store was created and approved with the #7 executable.
 The #8 executable rejected startup with `INVALID_STORE`.
-The database SHA-256 remained `5111e2eca4b262e8d744bd0701d66b9af9f47a2016eeb5c49d92ad8cf598059d`.
+The database SHA-256 remained `2636fae70ddea895dccffc75be076ebaa7ff044489d5201af9d5c3de56345593`.
 The #7 executable then read the exact original task, approval, checkpoint, and instance identity.
 No migration or restoration was performed.
 
 Prior executable SHA-256: `a5defad71e75fa86e43fce46b5deb08c5fb828ec553f1ee669ccd6a40d5e72c8`.
-Candidate executable SHA-256: `f5de923baa79605f86d763667f7b4cf1934156e939dc43c87d6a07e689f4d429`.
+Candidate executable SHA-256: `3cba395929c20aeba605a6208ff04382367c6901234b1ab471c71ad80908d09b`.
 
 To repeat this check, keep the prior executable before building.
 Create a disposable named instance and approved task with that executable, then stop its daemon.
@@ -92,7 +95,7 @@ Saves and transitions now require recorded equivalence and indexed effect-resolu
 A second regression found duplicate uncertain-effect descriptions could lose one unresolved occurrence.
 Preservation now matches each occurrence separately.
 Standards review requested the JSON expansion and a shared effect-resolution schema. Both changes are applied.
-Formal committed reviews remain pending.
+Formal Standards and Spec reviews of commit `c944b02` found no unresolved findings.
 
 ## Coverage and limitations
 
