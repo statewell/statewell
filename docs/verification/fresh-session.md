@@ -35,7 +35,7 @@ They did not create another instance or select another store.
 
 ## Reproduction
 
-The throwaway source is retained on [prototype/fresh-session](https://github.com/statewell/statewell/tree/prototype/fresh-session).
+The throwaway source and findings are retained at [prototype commit 19e1740](https://github.com/statewell/statewell/tree/19e1740f6adaf8dc2fa521c43193cf76fc6b90e1).
 Its README describes setup, initial-session interruption, fresh-session input, and lead verification.
 Run its setup and service commands with a built application checkout:
 
@@ -101,7 +101,7 @@ The final checkpoint has no next action, blocker, or uncertain external effect.
 
 The lead independently repeated the document check and inspected the complete diff.
 Only `docs/INSTANCE-CLI.md` changed among tracked files. The original document remains an exact prefix.
-The lead compared final CLI and MCP task responses; they were identical.
+The lead compared final CLI and Model Context Protocol (MCP) task responses; they were identical.
 Exact MCP history reads returned six checkpoints, including the unchanged interrupted checkpoint 5.
 Checkpoint 6 retained inspection and resolution evidence. Checkpoint 7 retained completion evidence.
 The approved contract and approval source remained unchanged at contract revision 1.
@@ -112,7 +112,15 @@ The initial session issued the POST. Both GET inspections occurred in the fresh 
 
 Final documentation SHA-256 before integration: `9462ef4898799e4ac4c19d54d05a81eea542844ef125733bc066b5386d595d1a`.
 The lead integrated that exact walkthrough into the main checkout.
-Final installed-package checks and independent review remain pending.
+The final offline-installed package suite passed 81 tests, with 1237 assertions, in 112.23 seconds.
+The archive contained exactly six permitted regular files. The installed executable matched the unchanged build.
+All 21 documented operations matched compiled help. All 10 JavaScript Object Notation (JSON) examples parsed, including the indented walkthrough examples.
+Whitespace and local documentation links passed.
+The final done task remained exact after another disposable daemon stop and restart.
+The lead then stopped the disposable daemon and receipt service while retaining their evidence.
+
+No application code changed in this ticket.
+The source suite for the same executable passed 81 tests in issue #8; it was not repeated for this documentation-only change.
 
 ## Coverage and limitations
 
@@ -134,4 +142,7 @@ The lead prepared the approved task, isolated the environment, and controlled in
 Separate initial and fresh agents own only the disposable documentation task in sequence.
 The fresh agent has no fork of the earlier conversation.
 The lead owns integration, final checks, commits, and GitHub updates.
-Final Standards and Spec reviews remain pending.
+The Standards review found one missing abbreviation expansion. It was corrected and rechecked.
+The Spec reviewer independently compared the retained public responses, checkpoint history, receipt counts, and integrated document digest.
+Both review axes have no unresolved findings.
+The reviews did not run commands against the task store; final verification remained with the lead.
