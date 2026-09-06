@@ -25,7 +25,17 @@ const expected = { expectedRevision: revision, expectedContractRevision: revisio
 const mutation = { ...selection, ...expected, retryKey: text };
 export const taskSchemas = {
   "task.create": z.object({ ...selection, retryKey: text, expectedRevision: z.literal(0), contract: contractSchema, source: sourceSchema, checkpoint: checkpointSchema }).strict(),
-  "task.transition": z.object({ ...mutation, state: z.enum(["todo", "in-progress", "blocked", "done", "cancelled"]), checkpoint: checkpointSchema, dependencyEvidence: z.array(z.object({ conditionIndex: z.number().int().nonnegative(), evidence: text }).strict()).optional(), reason: text.optional(), approval: approvalSchema.optional(), failureEvidence: texts.min(1).optional(), acceptanceEvidence: z.array(z.object({ checkIndex: z.number().int().nonnegative(), status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).optional(), blockerResolutions: z.array(z.object({ blockerIndex: z.number().int().nonnegative(), evidence: text }).strict()).optional() }).strict(),
+  "task.transition": z.object({
+    ...mutation,
+    state: z.enum(["todo", "in-progress", "blocked", "done", "cancelled"]),
+    checkpoint: checkpointSchema,
+    dependencyEvidence: z.array(z.object({ conditionIndex: z.number().int().nonnegative(), evidence: text }).strict()).optional(),
+    reason: text.optional(),
+    approval: approvalSchema.optional(),
+    failureEvidence: texts.min(1).optional(),
+    acceptanceEvidence: z.array(z.object({ checkIndex: z.number().int().nonnegative(), status: z.enum(["passed", "failed", "unverified"]), evidence: text }).strict()).optional(),
+    blockerResolutions: z.array(z.object({ blockerIndex: z.number().int().nonnegative(), evidence: text }).strict()).optional(),
+  }).strict(),
   "task.save": z.object({ ...mutation, checkpoint: checkpointSchema }).strict(),
   "task.read": z.object(selection).strict(),
   "task.check": z.object({ ...selection, ...expected }).strict(),
@@ -106,10 +116,13 @@ function checkRevisions(current: ReturnType<typeof readTask>, input: z.infer<typ
   if (current.task.contractRevision !== input.expectedContractRevision) throw new StatewellError("STALE_CONTRACT_REVISION", "Read the current contract before continuing.");
 }
 
+function coversEveryIndex(indices: number[], count: number) {
+  return indices.length === count && new Set(indices).size === count && indices.every(index => index >= 0 && index < count);
+}
+
 function checkCompletion(contract: z.infer<typeof contractSchema>, input: Pick<z.infer<typeof taskSchemas["task.transition"]>, "checkpoint" | "approval" | "acceptanceEvidence">) {
   const evidence = input.acceptanceEvidence ?? [];
-  if (evidence.length !== contract.acceptanceChecks.length || new Set(evidence.map(value => value.checkIndex)).size !== evidence.length ||
-      evidence.some(value => value.checkIndex >= contract.acceptanceChecks.length || value.status !== "passed")) throw new StatewellError("COMPLETION_EVIDENCE_REQUIRED", "Record passing evidence for each acceptance check in the current contract.");
+  if (!coversEveryIndex(evidence.map(value => value.checkIndex), contract.acceptanceChecks.length) || evidence.some(value => value.status !== "passed")) throw new StatewellError("COMPLETION_EVIDENCE_REQUIRED", "Record passing evidence for each acceptance check in the current contract.");
   if (input.checkpoint.blockers.some(blocker => blocker.affectsCompletion !== false)) throw new StatewellError("UNRESOLVED_BLOCKER", "Resolve completion blockers before marking the task done.");
   if (contract.completionApprovalRequired && !input.approval) throw new StatewellError("APPROVAL_REQUIRED", "Record the required maintainer approval of completion.");
 }
@@ -162,16 +175,13 @@ export function taskOperation(db: Database, directory: string, operation: string
             (input.approval !== undefined && input.state !== "done" && input.state !== "cancelled" && current.task.state !== "cancelled")) throw new StatewellError("INVALID_TASK_INPUT", "Supply only evidence that applies to this transition.");
         if (input.state === "in-progress") {
           const dependencies = input.dependencyEvidence ?? [];
-          if (dependencies.length !== current.task.contract.dependencyConditions.length || new Set(dependencies.map(value => value.conditionIndex)).size !== dependencies.length ||
-              dependencies.some(value => value.conditionIndex >= current.task.contract.dependencyConditions.length)) throw new StatewellError("DEPENDENCY_EVIDENCE_REQUIRED", "Record evidence for each dependency condition before implementation.");
+          if (!coversEveryIndex(dependencies.map(value => value.conditionIndex), current.task.contract.dependencyConditions.length)) throw new StatewellError("DEPENDENCY_EVIDENCE_REQUIRED", "Record evidence for each dependency condition before implementation.");
           if (!current.task.approval) throw new StatewellError("APPROVAL_REQUIRED", "Record contract approval before implementation.");
           if (current.contractMismatch) throw new StatewellError("CHECKPOINT_CONTRACT_MISMATCH", "Compare the current contract and save a new checkpoint before implementation.");
         }
         if (current.task.state === "blocked" && input.state === "todo") {
           const resolutions = input.blockerResolutions ?? [];
-          if (input.checkpoint.blockers.length || resolutions.length !== current.checkpoint.content.blockers.length ||
-              new Set(resolutions.map(value => value.blockerIndex)).size !== resolutions.length ||
-              resolutions.some(value => value.blockerIndex >= current.checkpoint.content.blockers.length)) throw new StatewellError("RESOLUTION_REQUIRED", "Record evidence for each current blocker and clear the blockers before returning to todo.");
+          if (input.checkpoint.blockers.length || !coversEveryIndex(resolutions.map(value => value.blockerIndex), current.checkpoint.content.blockers.length)) throw new StatewellError("RESOLUTION_REQUIRED", "Record evidence for each current blocker and clear the blockers before returning to todo.");
         }
         if (input.state === "cancelled" && !input.reason) throw new StatewellError("CANCELLATION_REASON_REQUIRED", "Record the reason for cancellation.");
         if ((input.state === "cancelled" || current.task.state === "cancelled") && !input.approval) throw new StatewellError("APPROVAL_REQUIRED", "Record maintainer approval for cancellation or resumption of cancelled work.");

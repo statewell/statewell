@@ -36,13 +36,13 @@ Use STATEWELL_HOME to select the local registration directory.
 Keep data outside repositories. Only an existing main instance starts automatically.
 Other instances require explicit startup. Removal preserves data.
 Project registration requires an exact absolute root. Queries do not create stores.
-Task input uses JavaScript Object Notation (JSON). Tasks remain in todo; workflow transitions are unavailable.
+Task input uses JavaScript Object Notation (JSON). New tasks start in todo.
 Record approval of exact saved content with task approve. Propose changes with task propose.
 Use task check to check recorded approval and checkpoint agreement.
+This check does not verify evidence, dependencies, repository state, or permission for external actions.
 Use task transition to change state with its checkpoint and required evidence.
 Completion validates recorded evidence fields. It does not independently verify their truth.
-This check does not verify evidence, dependencies, repository state, or permission for external actions.
-Supply expectedRevision and expectedContractRevision for saves, proposals, approvals, and checks.
+Supply expectedRevision and expectedContractRevision for saves, transitions, proposals, approvals, and checks.
 Approval is reported audit evidence. Statewell does not authenticate the maintainer.`);
     process.exit(0);
   }

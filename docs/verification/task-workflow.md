@@ -3,7 +3,8 @@
 ## Problem and scope
 
 [Issue #7](https://github.com/statewell/statewell/issues/7) requires controlled task transitions with durable checkpoints and reported evidence.
-The change adds `task transition` and `task_transition` through the existing selected-instance boundary.
+The command-line interface (CLI) provides `task transition`. The Model Context Protocol (MCP) interface provides `task_transition`.
+Both operations use the existing selected-instance boundary.
 Task state, transition evidence, checkpoint, and retry response commit together.
 Ordinary checkpoint saves preserve workflow state.
 
@@ -22,7 +23,7 @@ The parent specification and unrelated local files remain unchanged.
 - Failure inputs: Linux process termination, `strace`, and a controlled Unix socket proxy.
 - Normal development data: not used.
 
-Linux x64 is the accepted MVP target. ARM64 and macOS remain unverified and deferred.
+Linux x64 is the accepted minimum viable product (MVP) target. ARM64 and macOS remain unverified and deferred.
 A cross-build does not establish platform support.
 
 ## Verification steps and results
@@ -47,7 +48,7 @@ It checks the six permitted regular files, compares the installed executable wit
 | Reject all other transitions. | Both interfaces reject ten other different-state edges and five same-state transition requests. | Pass in source and installed-package suites. |
 | Require contract approval before implementation. | An unapproved start fails without writes. Reconciled approval permits start. | Pass in source and installed-package suites. |
 | Require blockers and resolution evidence. | Blocked saves require a resolution action and preserve blockers. Returning to todo requires indexed evidence for every blocker. | Pass in source and installed-package suites. |
-| Require passing completion evidence and required approval. | Missing, duplicate, failed, and out-of-range entries fail. Relevant blockers and missing required approval prevent done. | Pass in source and installed-package suites. |
+| Require passing completion evidence and required approval. | Missing, duplicate, failed, unverified, and out-of-range entries fail. Relevant blockers and missing required approval prevent done. | Pass in source and installed-package suites. |
 | Permit terminal next-action absence. | Done and cancelled accept null. Todo, in-progress, and blocked reject null. | Pass in source and installed-package suites. |
 | Control cancellation and reopening. | Cancellation needs a reason and approval. Done reopening needs failure evidence and a reason. Cancelled resumption needs approval. | Pass in source and installed-package suites. |
 | Keep task updates and checkpoints consistent. | Crash and response-loss checks verify the complete prior or committed state through public reads and retries. | Pass in source and installed-package suites. |
@@ -58,16 +59,16 @@ It checks the six permitted regular files, compares the installed executable wit
 | Check | Actual result |
 | --- | --- |
 | Type check | Passed. |
-| Source suite | 71 passed, 0 failed, 1122 assertions, 89.63 seconds. |
-| Offline-installed suite | 71 passed, 0 failed, 1116 assertions, 99.98 seconds. |
-| Compiled build | Passed. |
+| Source suite | 71 passed, 0 failed, 1117 assertions, 89.00 seconds. |
+| Offline-installed suite | 71 passed, 0 failed, 1123 assertions, 102.24 seconds. |
+| Compiled build and help | Passed. Help lists transitions and no longer claims that they are unavailable. |
 | Package contents | Exactly six permitted regular files. The installed executable matched the build. |
 | Whitespace and local documentation links | Passed. |
 | Earlier schema preservation | Passed with unchanged database bytes and exact earlier public reads. |
 
 The suite contains 45 task tests, 14 instance tests, and 12 lifecycle tests.
 Assertion counts can vary because a concurrent-removal test checks each observed permitted error.
-The executable SHA-256 is `f2762492a4f105bb172be51370369f3ec5f722e642d1b16e8b0681e07e00f6f0`.
+The executable SHA-256 is `a5defad71e75fa86e43fce46b5deb08c5fb828ec553f1ee669ccd6a40d5e72c8`.
 
 ### Failure boundaries
 
@@ -95,7 +96,7 @@ The preservation check uses a disposable instance created by that executable.
 5. Restart the previous executable. Require the exact earlier task, checkpoint, approval, and instance identity.
 6. Remove only the disposable test directory.
 
-The new executable returned `INVALID_STORE`. The database digest remained `b9331c1f54c19abb7443db60ffe43c3110402c9addd5a9e4ce8a29972164ff50`.
+The new executable returned `INVALID_STORE`. The database digest remained `0ca420882339ef715da702abc26a442876fc4eb48597c35890c02b813b11c8fe`.
 The earlier executable then returned the exact saved task, checkpoint, approval, and instance identity.
 The new schema is version 3. No migration or data deletion is implemented.
 
@@ -134,5 +135,8 @@ The reviewer rechecked the fix and found no further concrete specification gaps.
 
 The maintainer requested implementation with `$work-ticket 7`.
 The parent specification supplies the accepted CLI/MCP testing boundary with disposable real SQLite data.
-Formal committed Standards and Spec reviews are pending.
+The formal Standards review found stale CLI help and missing abbreviation expansions. Both findings were corrected and rechecked.
+The suggested shared index-coverage helper was implemented. Final source and package suites passed after that change.
+The Spec review found the same stale help. The reviewer confirmed its correction and the unchanged index-validation behavior.
+No unresolved findings remain on either review axis.
 Verification passed. Push verification, issue reporting, and maintainer acceptance for closure are pending.
