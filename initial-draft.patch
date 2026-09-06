@@ -1,0 +1,46 @@
+diff --git a/docs/INSTANCE-CLI.md b/docs/INSTANCE-CLI.md
+index 09c1e69..9d5811d 100644
+--- a/docs/INSTANCE-CLI.md
++++ b/docs/INSTANCE-CLI.md
+@@ -666,3 +666,41 @@ Each removed uncertain effect requires resolution evidence for its index in that
+ Unresolved effects must remain recorded. Add a blocker and request direction when an outcome remains unknown.
+ A new task cannot review an earlier checkpoint.
+ `task continue` uses its own inspection fields instead of `checkpoint.review`.
++
++
++## Fresh-session recovery walkthrough
++
++Use this procedure after a session stops. A saved checkpoint is evidence to inspect.
++It is not permission to repeat an external action.
++
++1. Select the saved instance and project root. Use the same `STATEWELL_HOME`.
++   Read the repository instructions and inspect the installed `statewell --help`.
++2. Put the saved task identifier in `/tmp/task-reference.json`.
++   Use the following input structure:
++
++   ```json
++   {"taskId":"00000000-0000-4000-8000-000000000001"}
++   ```
++
++   Read the task context through the public command-line interface (CLI):
++
++   ```sh
++   statewell task context --instance test --root /absolute/project --input /tmp/task-reference.json
++   ```
++
++3. Compare the saved repository state with the actual files before you edit them.
++   Read the uncommitted changes and the retained check results.
++
++   ```sh
++   git status --short
++   git branch --show-current
++   git rev-parse HEAD
++   git diff -- docs/INSTANCE-CLI.md
++   ```
++
++   Inspect the actual result of each uncertain external action.
++   For example, read an existing receipt before you repeat a request.
++   A lost response does not show that an external action failed.
++
++Draft status: The exact-read fallback, reconciliation, continuation request,
++and completion steps remain to be added. Do not use this draft as a complete procedure.

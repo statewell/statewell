@@ -1,0 +1,184 @@
+diff --git a/docs/INSTANCE-CLI.md b/docs/INSTANCE-CLI.md
+index 09c1e69..c322217 100644
+--- a/docs/INSTANCE-CLI.md
++++ b/docs/INSTANCE-CLI.md
+@@ -666,3 +666,179 @@ Each removed uncertain effect requires resolution evidence for its index in that
+ Unresolved effects must remain recorded. Add a blocker and request direction when an outcome remains unknown.
+ A new task cannot review an earlier checkpoint.
+ `task continue` uses its own inspection fields instead of `checkpoint.review`.
++
++
++## Fresh-session recovery walkthrough
++
++Use this procedure after a session stops. A saved checkpoint is evidence to inspect.
++It is not permission to repeat an external action.
++Use the same installed executable, `STATEWELL_HOME`, instance, and project for all steps.
++The examples use instance `test` and root `/absolute/project`.
++Replace these values and each example identifier with the saved values.
++
++1. Read the repository instructions and inspect `statewell --help`.
++   Confirm that the installed application supports the required operations.
++   Resolve the project and read the instance:
++
++   ```sh
++   statewell instance inspect --instance test
++   statewell project resolve --instance test --root /absolute/project
++   ```
++
++2. Create `/tmp/task-reference.json` with the saved task identifier:
++
++   ```json
++   {"taskId":"00000000-0000-4000-8000-000000000001"}
++   ```
++
++   Retrieve the context:
++
++   ```sh
++   statewell task context --instance test --root /absolute/project --input /tmp/task-reference.json
++   ```
++
++   Read the full contract, approval, checkpoint, and continuation instructions.
++   If the result is `CONTEXT_TOO_LARGE`, read all exact references from the error.
++   For each reference, pass `root` and `projectId` as command options.
++   Put its other fields in a separate JSON file.
++   Use the operation that matches the reference:
++
++   ```sh
++   statewell task contract --instance test --root /absolute/project --project-id PROJECT_ID --input /tmp/contract-reference.json
++   statewell task checkpoint --instance test --root /absolute/project --project-id PROJECT_ID --input /tmp/checkpoint-reference.json
++   ```
++
++   Read `references.lastTransition` with `task checkpoint` when present.
++   Use its own input file. Do not substitute the latest checkpoint for an exact reference.
++   Request `task context` again and compare the task revision with the first result.
++   A second size error still supplies current revision identifiers.
++   If the revision changed, read the new references before you continue.
++   A size error does not permit you to omit requirements.
++
++3. Inspect actual files, dependencies, and uncertain external effects before implementation.
++   Compare the saved repository state with the selected worktree:
++
++   ```sh
++   git -C /absolute/project status --short
++   git -C /absolute/project branch --show-current
++   git -C /absolute/project rev-parse HEAD
++   git -C /absolute/project diff -- docs/INSTANCE-CLI.md
++   ```
++
++   Read the changed files and retained check results.
++   Check each dependency condition against actual evidence.
++   Inspect the result of each uncertain external action.
++   For example, read an existing receipt before you repeat a request.
++   A lost response does not show that the external action failed.
++   If the receipt exists, record it and do not repeat the request.
++   If an outcome remains unknown, retain the uncertain effect, record a blocker,
++   and request direction. Do not report a resolution without evidence.
++
++   If the branch or worktree differs, inspect the required files and results there.
++   Record `inspection.equivalenceEvidence` that explains why the work is equivalent,
++   or request maintainer direction. Do not switch branches or copy work automatically.
++
++4. Compare the current contract with the checkpoint contract revision.
++   If `contractMismatch` is true, read both contracts with `task contract`.
++   Use `taskId` and the required `contractRevision` in each reference file.
++   Save a complete checkpoint that reconciles progress with the current requirements:
++
++   ```sh
++   statewell task save --instance test --root /absolute/project --input /tmp/reconciled-checkpoint.json
++   ```
++
++   The input needs `taskId`, a new `retryKey`, both current expected revisions,
++   and all checkpoint fields from the checkpoint example above.
++   Record which requirements are complete and which remain.
++   Preserve unresolved effects and supply `checkpoint.review` when required by
++   the inspection rules above. Approval of the current contract is also required.
++   A reconciliation save does not approve a contract or start implementation.
++   Use the returned task revision for the next request.
++
++5. Record the inspection with `task continue` before further implementation.
++   Create `/tmp/continue.json` with this structure:
++
++   ```json
++   {
++     "taskId": "00000000-0000-4000-8000-000000000001",
++     "retryKey": "recovery-inspection-1",
++     "expectedRevision": 5,
++     "expectedContractRevision": 1,
++     "checkpoint": {
++       "progress": "Inspected the saved work and current requirements.",
++       "remainingWork": ["Complete the remaining approved work."],
++       "nextAction": "Complete the remaining approved work.",
++       "blockers": [],
++       "evidence": ["The actual files match the saved progress."],
++       "repositoryState": {
++         "worktree": "/absolute/project",
++         "branch": "main",
++         "commit": null,
++         "uncommittedChanges": []
++       },
++       "uncertainExternalEffects": []
++     },
++     "inspection": {
++       "repositoryState": {
++         "worktree": "/absolute/project",
++         "branch": "main",
++         "commit": null,
++         "uncommittedChanges": []
++       },
++       "evidence": "Read the changed files, Git state, and retained check results."
++     },
++     "dependencyEvidence": [],
++     "externalEffectResolutions": []
++   }
++   ```
++
++   Replace the example revisions, repository state, progress, and evidence with actual values.
++   Both repository state objects must match the inspected state.
++   Use `null` only for an absent branch or commit. Record all uncommitted changes.
++   Add `inspection.equivalenceEvidence` when the saved branch or worktree differs.
++   Supply one `dependencyEvidence` entry per contract dependency condition.
++   Supply one `externalEffectResolutions` entry per earlier uncertain effect.
++   Use the entry formats from the continuation rules above. Empty arrays apply only
++   when there are no corresponding conditions or effects.
++   Resolve all blockers and uncertain outcomes before this operation:
++
++   ```sh
++   statewell task continue --instance test --root /absolute/project --input /tmp/continue.json
++   ```
++
++   Continue only after a successful result. Preserve the input and retry key if
++   the response is lost. Use the retry procedure above before another mutation.
++   This operation preserves the task state.
++   A `todo` task still needs an approved transition to `in-progress` with dependency evidence.
++   A blocked or terminal task needs the applicable resolution or reopening procedure first.
++
++6. Complete the remaining approved work and run the acceptance checks.
++   Inspect the final repository state and external results.
++   Keep failed checks and unresolved effects in the checkpoint until resolved.
++   Do not report an unchecked requirement as passed.
++
++7. Record completion through `task transition`.
++   Create `/tmp/completion.json` with `taskId`, a new `retryKey`, both current expected
++   revisions, `state: "done"`, and a complete `checkpoint`.
++   Record the final progress, actual evidence, and repository state.
++   Use an empty `remainingWork` array, no unresolved completion blockers, and
++   `nextAction: null` when no next action remains.
++   Supply an `acceptanceEvidence` entry for every current acceptance check:
++
++   ```json
++   {"checkIndex":0,"status":"passed","evidence":"The required check passed; record its command and actual result here."}
++   ```
++
++   Use each zero-based check index exactly once. Replace the example evidence.
++   If `completionApprovalRequired` is true, obtain the required approval and include
++   `approval` with its actual `source`. Initial contract approval is not completion approval.
++
++   ```sh
++   statewell task transition --instance test --root /absolute/project --input /tmp/completion.json
++   statewell task read --instance test --root /absolute/project --input /tmp/task-reference.json
++   ```
++
++   Confirm that the read returns `done`, the expected contract revision, the final
++   checkpoint, and passing evidence for every check in `task.lastTransition`.
++   Preserve the exact request for retry if the transition response is lost.
++   Statewell records reported evidence. It does not independently certify the checks.
