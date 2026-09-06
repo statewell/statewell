@@ -24,6 +24,9 @@ project inspect --root PATH [--instance NAME] [--project-id ID]
 task create --root PATH --input FILE [--instance NAME] [--project-id ID]
 task transition --root PATH --input FILE [--instance NAME] [--project-id ID]
 task save --root PATH --input FILE [--instance NAME] [--project-id ID]
+task continue --root PATH --input FILE [--instance NAME] [--project-id ID]
+task context --root PATH --input FILE [--instance NAME] [--project-id ID]
+task checkpoint --root PATH --input FILE [--instance NAME] [--project-id ID]
 task read --root PATH --input FILE [--instance NAME] [--project-id ID]
 task approve --root PATH --input FILE [--instance NAME] [--project-id ID]
 task propose --root PATH --input FILE [--instance NAME] [--project-id ID]
@@ -42,7 +45,10 @@ Use task check to check recorded approval and checkpoint agreement.
 This check does not verify evidence, dependencies, repository state, or permission for external actions.
 Use task transition to change state with its checkpoint and required evidence.
 Completion validates recorded evidence fields. It does not independently verify their truth.
-Supply expectedRevision and expectedContractRevision for saves, transitions, proposals, approvals, and checks.
+Use task context for complete continuation records or exact-read references when the size limit is exceeded.
+Use task checkpoint for retained history. Use task continue to record inspection before continued implementation.
+Inspect uncertain external outcomes before retry. Record a blocker and request direction if an outcome remains unknown.
+Supply expectedRevision and expectedContractRevision for saves, continuations, transitions, proposals, approvals, and checks.
 Approval is reported audit evidence. Statewell does not authenticate the maintainer.`);
     process.exit(0);
   }
@@ -73,7 +79,7 @@ Approval is reported audit evidence. Statewell does not authenticate the maintai
     if (options["--detached"]) { await launchDetached(instance); console.log(JSON.stringify({ ready: true, instance })); }
     else await startDaemon(instance);
   }
-  else if (["task transition", "task create", "task save", "task read", "task approve", "task check", "task propose", "task contract", "task proposal"].includes(command)) {
+  else if (["task continue", "task context", "task checkpoint", "task transition", "task create", "task save", "task read", "task approve", "task check", "task propose", "task contract", "task proposal"].includes(command)) {
     if (!options["--input"]) throw new StatewellError("USAGE", "Supply a JSON input file with --input.");
     const fd = openSync(options["--input"], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let input;

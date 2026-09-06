@@ -103,7 +103,7 @@ test("MCP initializes and shares selected instance projects with CLI", async () 
   try {
     await client.connect(transport);
     expect(client.getServerVersion()?.name).toBe("statewell");
-    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["instance_inspect", "project_inspect", "project_register", "project_resolve", "task_approve", "task_check", "task_contract", "task_create", "task_proposal", "task_propose", "task_read", "task_save", "task_transition"]);
+    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["instance_inspect", "project_inspect", "project_register", "project_resolve", "task_approve", "task_check", "task_checkpoint", "task_context", "task_continue", "task_contract", "task_create", "task_proposal", "task_propose", "task_read", "task_save", "task_transition"]);
     const missing = await client.callTool({ name: "project_register", arguments: {} });
     expect(missing.isError).toBe(true);
     expect(JSON.parse((missing.content as any[])[0].text).error.code).toBe("PROJECT_SELECTION_REQUIRED");

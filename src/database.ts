@@ -26,7 +26,7 @@ export async function openDatabase(directory: string, create = false) {
     const request = pending.get(message.requestId);
     if (!request) return;
     clearTimeout(request.timer); pending.delete(message.requestId);
-    if (message.error) request.reject(new StatewellError(message.error.code, message.error.message));
+    if (message.error) request.reject(new StatewellError(message.error.code, message.error.message, message.error.details));
     else request.resolve(message.value);
   });
   return {

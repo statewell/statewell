@@ -422,7 +422,7 @@ statewell task proposal --instance test --root /absolute/project --input /absolu
 ```
 
 Missing records return `CONTRACT_NOT_FOUND` or `PROPOSAL_NOT_FOUND`.
-Record identifiers and revision numbers must be retained by the caller. Listing and checkpoint history selection remain separate work.
+Record identifiers and revision numbers must be retained by the caller. Task listing remains separate work. Use checkpoint references to inspect retained history.
 Reads do not return an unbounded contract history.
 
 ### Task interface mapping
@@ -433,6 +433,9 @@ Reads do not return an unbounded contract history.
 | `task save` | `task_save` |
 | `task transition` | `task_transition` |
 | `task read` | `task_read` |
+| `task context` | `task_context` |
+| `task checkpoint` | `task_checkpoint` |
+| `task continue` | `task_continue` |
 | `task approve` | `task_approve` |
 | `task propose` | `task_propose` |
 | `task check` | `task_check` |
@@ -440,9 +443,9 @@ Reads do not return an unbounded contract history.
 | `task proposal` | `task_proposal` |
 
 All mutations commit their state change and retry result together.
-Approval and proposal operations preserve the latest checkpoint; creation, checkpoint saves, and state transitions add a checkpoint.
+Approval and proposal operations preserve the latest checkpoint; creation, saves, continuations, and state transitions add a checkpoint.
 A retry returns its original result before stale-revision checks, even after later approvals or saves.
-The current schema version is 3. Earlier stores remain unchanged and require their earlier executable.
+The current schema version is 4. Earlier stores remain unchanged and require their earlier executable.
 
 
 ## Task progress and completion
@@ -556,7 +559,7 @@ A resumed unapproved task still needs initial contract approval before implement
 `task.lastTransition` contains the latest transition and its `checkpointRevision`, or `null` before the first transition.
 It preserves the reason, approval, and evidence after later checkpoint saves.
 Transition records include the prior state, resulting state, and contract revision.
-Earlier transitions remain stored with their checkpoints. History selection remains separate work.
+Earlier transitions remain available through exact checkpoint reads.
 
 Done and cancelled checkpoints permit an explicit `nextAction: null`.
 Other states require a nonempty next action, including after reopening.
@@ -564,3 +567,102 @@ A done checkpoint save cannot introduce a relevant unresolved blocker.
 If an approved contract revision changes completed requirements, ordinary saves cannot replace the earlier completion evidence.
 Reopen with failure evidence and a reason before addressing the changed requirements.
 Contract approval alone does not change workflow state.
+
+## Continuation context
+
+Use `task context` with `taskId` and optional `maxBytes`.
+The corresponding MCP tool is `task_context`.
+The operation returns the complete current task, latest checkpoint, checkpoint count, mismatch flag, and continuation instructions.
+It does not execute work or certify that continuation is safe.
+The saved contract includes dependency conditions. Checkpoints retain progress, failed approaches, evidence, repository state, and uncertain external effects.
+No inference provider or GitHub connection is used.
+
+`maxBytes` limits the UTF-8 bytes of the JSON `value` object, before the interface adds its envelope.
+The default and maximum are 16000 bytes. The minimum is 256 bytes.
+The limit applies to a successful context bundle. An error can exceed the requested limit to supply recovery instructions and references.
+The transport limits remain separate.
+
+If required content does not fit, the operation returns `CONTEXT_TOO_LARGE`.
+The error includes `details.complete: false`, `requiredBytes`, `maxBytes`, current revision identifiers, task state, and `contractMismatch`.
+It also includes instructions and `references.contract`, `references.checkpoint`, and, when present, `references.lastTransition`.
+References select exact records in the same project and instance.
+Each reference is an MCP argument object. Call `task_contract` for the contract and `task_checkpoint` for checkpoint references.
+For CLI reads, pass `root` and `projectId` as command options. Put the other reference fields in the input file.
+Use the same selected instance for every reference.
+Read all references before continuation. Check the current task revision after those separate reads.
+A size error is not an incomplete successful bundle or permission to omit constraints.
+
+### Checkpoint history and corrections
+
+Use `task checkpoint` with `taskId` and `checkpointRevision` to read an exact retained checkpoint.
+Its response includes `value.checkpoint`, with the saved content, contract revision, transition, and any continuation evidence.
+Each checkpoint includes `previousCheckpointRevision`. A null value identifies the first checkpoint.
+Follow this reference to inspect earlier history. Task revisions without checkpoints do not interrupt this chain.
+A missing checkpoint returns `CHECKPOINT_NOT_FOUND`.
+
+To correct an earlier checkpoint, save a complete new checkpoint with `correctedCheckpointRevision` in its content.
+The referenced checkpoint must exist in the selected task and project.
+The correction becomes current. The earlier checkpoint and evidence remain available.
+Corrections follow normal state, revision, retry, repository inspection, and external-outcome controls.
+They cannot replace the approved contract or erase required inspection evidence.
+
+### Record inspection before continuation
+
+Use `task continue` with both expected revisions, a retry key, and a complete checkpoint.
+This operation preserves `todo` or `in-progress` state. Other states require resolution or reopening first.
+A task in `todo` still needs the normal transition to `in-progress` before implementation.
+
+Supply these additional fields:
+
+| Field | Required content |
+| --- | --- |
+| `inspection.repositoryState` | The inspected repository state, with the same fields as the checkpoint repository state. |
+| `inspection.evidence` | Nonempty text that identifies the actual file and repository inspection. |
+| `inspection.equivalenceEvidence` | Nonempty comparison evidence when the earlier checkpoint names a different branch or worktree. |
+| `dependencyEvidence` | One entry per current dependency condition, with `conditionIndex` and nonempty `evidence`. |
+| `externalEffectResolutions` | One entry per uncertain effect in the latest checkpoint, with `effectIndex` and nonempty `evidence`. |
+
+Use empty arrays when no dependencies or uncertain effects exist.
+Indices start at zero. Missing, duplicate, and out-of-range indices are rejected.
+The inspected worktree must equal the selected canonical root.
+The new checkpoint must record the same repository state as the inspection.
+It must have no blockers or uncertain external effects.
+
+Inspect actual files and results before reporting this evidence.
+A different branch or worktree requires recorded equivalence, or maintainer direction.
+Statewell does not switch branches, copy files, execute checks, or retry external actions.
+If an external outcome remains unknown, record a blocker and request direction. Do not report a fabricated resolution.
+
+Current contract approval is required.
+After a contract mismatch, compare the current requirements and save a reconciled checkpoint first.
+A continuation cannot perform that reconciliation and authorize continued implementation in the same request.
+Successful continuation saves its checkpoint, inspection evidence, and retry result together.
+`checkpoint.continuation` identifies the inspected earlier checkpoint and the reported inspection, dependency, and external-outcome evidence.
+Later saves preserve this record in history.
+
+The trusted local agent reports evidence honestly. Statewell validates fields and references, not the truth of inspection or approval.
+`task check` remains limited to contract approval and checkpoint agreement.
+A successful read, check, save, or continuation does not grant permission for an unrelated external action.
+
+### Preserve inspection obligations during saves
+
+Ordinary saves and transitions cannot silently replace a branch or worktree, or remove an uncertain effect.
+When those fields change, include `checkpoint.review`:
+
+```json
+{
+  "previousCheckpointRevision": 5,
+  "repositoryEvidence": "Inspected the required files in the selected worktree.",
+  "equivalenceEvidence": "The required changes and evidence are present on this branch.",
+  "externalEffectResolutions": [
+    {"effectIndex": 0, "evidence": "Read the existing receipt. No repeat action is needed."}
+  ]
+}
+```
+
+The previous revision must identify the latest checkpoint.
+A branch or worktree change requires both repository evidence fields and the selected canonical root.
+Each removed uncertain effect requires resolution evidence for its index in that checkpoint.
+Unresolved effects must remain recorded. Add a blocker and request direction when an outcome remains unknown.
+A new task cannot review an earlier checkpoint.
+`task continue` uses its own inspection fields instead of `checkpoint.review`.

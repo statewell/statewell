@@ -19,7 +19,7 @@ export async function sendRequest(current: Instance, operation: string, input: u
         if (end < 0) return;
         try {
           const result = JSON.parse(buffer.subarray(0, end).toString());
-          if (result.error) return fail(new StatewellError(result.error.code, result.error.message));
+          if (result.error) return fail(new StatewellError(result.error.code, result.error.message, result.error.details));
           if (result.instance?.id !== current.id) return fail(new StatewellError("IDENTITY_CHANGED", "The instance identity changed. Reconnect explicitly."));
           finished = true; clearTimeout(deadline); socket.destroy(); resolve(result);
         } catch { fail(new StatewellError("INVALID_RESPONSE", "The daemon response is invalid.")); }

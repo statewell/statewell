@@ -441,10 +441,13 @@ test("issue capture is self-contained and rejects incomplete source metadata wit
     approved = await mcp("task_approve", { root: f.project, taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, source, approval: { source: "User request captured with the issue." } });
     expect(approved.error).toBeUndefined();
     expect(await f.task("read", { taskId: input.taskId })).toEqual(approved);
+    expect((await mcp("task_context", { root: f.project, taskId: input.taskId })).value.task).toEqual(approved.value.task);
     expect(requests).toBe(0);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
   f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
   expect(await mcp("task_read", { root: f.project, taskId: input.taskId })).toEqual(approved);
+  expect((await f.task("context", { taskId: input.taskId })).value.checkpoint).toEqual(approved.value.checkpoint);
+  expect((await mcp("task_checkpoint", { root: f.project, taskId: input.taskId, checkpointRevision: 1 })).value.checkpoint).toEqual(approved.value.checkpoint);
   expect((await f.task("contract", { taskId: input.taskId, contractRevision: 1 })).value.contract).toEqual({ revision: 1, content: contract, source, approval: { source: "User request captured with the issue." } });
 });
 
@@ -690,4 +693,206 @@ test("CLI and MCP reject missing or malformed transition evidence without writes
     else expect(result).toMatchObject({ error: { code: cli.error.code } });
     expect(await f.task("read", { taskId: input.taskId })).toEqual(current);
   }
+});
+
+test("checkpoint corrections become current and preserve exact earlier evidence", async () => {
+  const f = await fixture(); const input = createInput();
+  const first = await f.task("create", input);
+  const correction = { ...checkpoint, progress: "Corrected the earlier result.", correctedCheckpointRevision: 1 };
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: correction };
+  const saved = await f.task("save", request);
+  expect(saved.error).toBeUndefined();
+  expect(saved.value.checkpoint.content).toEqual(correction);
+  const mcp = await f.mcp();
+  expect((await mcp("task_checkpoint", { root: f.project, taskId: input.taskId, checkpointRevision: 1 })).value.checkpoint).toEqual(first.value.checkpoint);
+  expect((await f.task("checkpoint", { taskId: input.taskId, checkpointRevision: 2 })).value.checkpoint).toEqual(saved.value.checkpoint);
+  expect(await f.task("save", { ...request, retryKey: crypto.randomUUID(), expectedRevision: 2, checkpoint: { ...correction, correctedCheckpointRevision: 3 } })).toMatchObject({ error: { code: "CHECKPOINT_NOT_FOUND" } });
+  f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
+  expect(await f.task("save", request)).toEqual(saved);
+  expect((await f.task("read", { taskId: input.taskId })).value.checkpoint).toEqual(saved.value.checkpoint);
+  expect((await mcp("task_checkpoint", { root: f.project, taskId: input.taskId, checkpointRevision: 1 })).value.checkpoint).toEqual(first.value.checkpoint);
+});
+
+test("bounded continuation context returns complete saved records or usable exact references", async () => {
+  const f = await fixture(); const input: any = createInput();
+  input.contract = { ...contract, scopeLimits: ["Preserve café constraints. ".repeat(60)], dependencyConditions: ["Inspect the fixture."] };
+  input.checkpoint = { ...checkpoint, uncertainExternalEffects: ["The receipt response was lost."], evidence: ["The first approach failed."] };
+  const saved = await f.task("create", input);
+  expect(saved.error).toBeUndefined();
+  const mcp = await f.mcp();
+  const request = { taskId: input.taskId, maxBytes: 16000 };
+  const context = await f.task("context", request);
+  expect(context.error).toBeUndefined();
+  expect(context.value.task).toEqual(saved.value.task);
+  expect(context.value.checkpoint).toEqual(saved.value.checkpoint);
+  expect(context.value.instructions.join(" ")).toContain("Inspect uncertain external outcomes before retry");
+  expect(await mcp("task_context", { root: f.project, ...request })).toEqual(context);
+  const small = await f.task("context", { ...request, maxBytes: 256 });
+  expect(small).toMatchObject({ error: { code: "CONTEXT_TOO_LARGE", details: { complete: false, taskRevision: 1, contractMismatch: false } } });
+  expect(small.error.details.requiredBytes).toBeGreaterThan(256);
+  expect(await mcp("task_context", { root: f.project, ...request, maxBytes: 256 })).toEqual(small);
+  const refs = small.error.details.references;
+  expect((await mcp("task_contract", refs.contract)).value.contract.content).toEqual(input.contract);
+  expect((await mcp("task_checkpoint", refs.checkpoint)).value.checkpoint).toEqual(saved.value.checkpoint);
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(saved);
+});
+
+test("continued implementation requires repository inspection, dependency evidence, and resolved external outcomes", async () => {
+  const f = await fixture(); const input: any = createInput();
+  input.contract = { ...contract, dependencyConditions: ["The receipt exists."] };
+  input.checkpoint = { ...checkpoint, uncertainExternalEffects: ["Receipt creation returned no response."] };
+  await f.task("create", input);
+  await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract: input.contract, approval: { source: "Implement this task." } });
+  const repositoryState = { ...checkpoint.repositoryState, worktree: f.project, branch: "reviewed" };
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1,
+    checkpoint: { ...checkpoint, repositoryState }, inspection: { repositoryState, evidence: "Inspected the files and receipt." },
+    dependencyEvidence: [{ conditionIndex: 0, evidence: "Read the receipt." }], externalEffectResolutions: [{ effectIndex: 0, evidence: "Read receipt 1. Do not repeat creation." }] };
+  expect(await f.task("continue", request)).toMatchObject({ error: { code: "REPOSITORY_EQUIVALENCE_REQUIRED" } });
+  const equivalent = { ...request, inspection: { ...request.inspection, equivalenceEvidence: "Compared the required files and retained the uncommitted change." } };
+  expect(await f.task("continue", { ...equivalent, externalEffectResolutions: [] })).toMatchObject({ error: { code: "EXTERNAL_OUTCOME_UNRESOLVED" } });
+  expect(await f.task("continue", { ...equivalent, dependencyEvidence: [] })).toMatchObject({ error: { code: "DEPENDENCY_EVIDENCE_REQUIRED" } });
+  const mcp = await f.mcp();
+  const continued = await mcp("task_continue", { root: f.project, ...equivalent });
+  expect(continued.error).toBeUndefined();
+  expect(continued.value.task.state).toBe("todo");
+  expect(continued.value.checkpoint.content.repositoryState).toEqual(repositoryState);
+  expect(continued.value.checkpoint.continuation).toMatchObject({ previousCheckpointRevision: 1, inspection: equivalent.inspection, dependencyEvidence: request.dependencyEvidence, externalEffectResolutions: request.externalEffectResolutions });
+  expect(await f.task("continue", equivalent)).toEqual(continued);
+  expect(await f.task("continue", { ...equivalent, retryKey: crypto.randomUUID() })).toMatchObject({ error: { code: "STALE_REVISION" } });
+});
+
+test("context keeps the latest mismatched checkpoint and continuation requires a separate reconciliation", async () => {
+  const f = await fixture(); const input = createInput();
+  await f.task("create", input);
+  await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Implement this task." } });
+  const proposalId = crypto.randomUUID();
+  const replacement = { ...contract, dependencyConditions: ["Inspect the new requirement."] };
+  await f.task("propose", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, proposalId, contract: replacement });
+  await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 3, expectedContractRevision: 1, proposalId, contract: replacement, approval: { source: "Approve the new requirement." } });
+  const mcp = await f.mcp();
+  const context = await mcp("task_context", { root: f.project, taskId: input.taskId });
+  expect(context.value).toMatchObject({ contractMismatch: true, task: { revision: 4, contractRevision: 2, contract: replacement }, checkpoint: { revision: 1, contractRevision: 1, content: checkpoint } });
+  const reconciled = { ...checkpoint, repositoryState: { ...checkpoint.repositoryState, worktree: f.project }, progress: "Compared the new dependency with the retained progress." };
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 4, expectedContractRevision: 2, checkpoint: reconciled,
+    inspection: { repositoryState: reconciled.repositoryState, evidence: "Read actual files." }, dependencyEvidence: [{ conditionIndex: 0, evidence: "Inspected the requirement." }], externalEffectResolutions: [] };
+  expect(await f.task("continue", request)).toMatchObject({ error: { code: "CHECKPOINT_CONTRACT_MISMATCH" } });
+  const saved = await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 4, expectedContractRevision: 2, checkpoint: { ...reconciled, review: { previousCheckpointRevision: 1, repositoryEvidence: "Read the selected files.", equivalenceEvidence: "The required files are equivalent." } } });
+  expect(saved.value.contractMismatch).toBe(false);
+  const continued = await mcp("task_continue", { root: f.project, ...request, expectedRevision: 5 });
+  expect(continued.error).toBeUndefined();
+  expect(continued.value.checkpoint.continuation.previousCheckpointRevision).toBe(5);
+  expect((await f.task("checkpoint", { taskId: input.taskId, checkpointRevision: 1 })).value.checkpoint.content).toEqual(checkpoint);
+  expect(await f.task("checkpoint", { taskId: input.taskId, checkpointRevision: 4 })).toMatchObject({ error: { code: "CHECKPOINT_NOT_FOUND" } });
+});
+
+test("ordinary saves cannot erase repository or external-outcome inspection obligations", async () => {
+  const f = await fixture(); const input = { ...createInput(), checkpoint: { ...checkpoint, uncertainExternalEffects: ["Unknown receipt result."] } };
+  const before = await f.task("create", input);
+  const update = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, repositoryState: { ...checkpoint.repositoryState, worktree: f.project, branch: "other" } } };
+  expect(await f.task("save", update)).toMatchObject({ error: { code: "REPOSITORY_EQUIVALENCE_REQUIRED" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(before);
+  const reviewed = { ...update.checkpoint, review: { previousCheckpointRevision: 1, repositoryEvidence: "Read the selected files.", equivalenceEvidence: "Required changes are present." } };
+  const mcp = await f.mcp();
+  expect(await mcp("task_save", { root: f.project, ...update, checkpoint: reviewed })).toMatchObject({ error: { code: "EXTERNAL_OUTCOME_UNRESOLVED" } });
+  const resolved = { ...reviewed, review: { ...reviewed.review, externalEffectResolutions: [{ effectIndex: 0, evidence: "The receipt exists. No retry is needed." }] } };
+  const saved = await f.task("save", { ...update, checkpoint: resolved });
+  expect(saved.error).toBeUndefined();
+  expect(saved.value.checkpoint.content.review).toEqual(resolved.review);
+  expect((await f.task("checkpoint", { taskId: input.taskId, checkpointRevision: 1 })).value.checkpoint).toEqual(before.value.checkpoint);
+});
+
+test("exact checkpoint history follows retained predecessors across approval revision gaps", async () => {
+  const f = await fixture(); const input = createInput();
+  await f.task("create", input);
+  await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Implement this task." } });
+  const saved = await f.task("save", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1, checkpoint });
+  expect(saved.value.checkpoint.previousCheckpointRevision).toBe(1);
+  const mcp = await f.mcp();
+  const latest = await mcp("task_checkpoint", { root: f.project, taskId: input.taskId, checkpointRevision: 3 });
+  expect(latest.value.checkpoint).toEqual(saved.value.checkpoint);
+  const first = await f.task("checkpoint", { taskId: input.taskId, checkpointRevision: latest.value.checkpoint.previousCheckpointRevision });
+  expect(first.value.checkpoint.previousCheckpointRevision).toBeNull();
+  expect(first.value.checkpoint.content).toEqual(checkpoint);
+});
+
+test("continuation reads and correction links stay inside the selected project and instance", async () => {
+  const f = await fixture(); const input = createInput(); await f.task("create", input);
+  const otherRoot = join(f.root, "other"); mkdirSync(otherRoot);
+  await f.cli("project", "register", "--instance", "test", "--root", otherRoot);
+  const mcp = await f.mcp();
+  for (const [operation, extra] of [["context", {}], ["checkpoint", { checkpointRevision: 1 }]] as const) {
+    expect(await f.task(operation, { taskId: input.taskId, ...extra }, "test", otherRoot)).toHaveProperty("error");
+    expect(await mcp(`task_${operation}`, { root: otherRoot, taskId: input.taskId, ...extra })).toHaveProperty("error");
+  }
+  expect(await f.task("create", { ...input, checkpoint: { ...checkpoint, correctedCheckpointRevision: 1 } }, "test", otherRoot)).toMatchObject({ error: { code: "CHECKPOINT_NOT_FOUND" } });
+  await f.cli("instance", "create", "--instance", "second"); await f.start("second");
+  await f.cli("project", "register", "--instance", "second", "--root", f.project);
+  const second = await f.mcp("second");
+  expect(await second("task_context", { root: f.project, taskId: input.taskId })).toMatchObject({ error: { code: "TASK_NOT_FOUND" } });
+  expect(await second("task_checkpoint", { root: f.project, taskId: input.taskId, checkpointRevision: 1 })).toMatchObject({ error: { code: "CHECKPOINT_NOT_FOUND" } });
+  const distinct = await second("task_create", { root: f.project, ...input, checkpoint: { ...checkpoint, progress: "Other instance only." } });
+  expect((await second("task_context", { root: f.project, taskId: input.taskId })).value.checkpoint).toEqual(distinct.value.checkpoint);
+  expect((await f.task("context", { taskId: input.taskId })).value.checkpoint.content.progress).toBe(checkpoint.progress);
+});
+
+test("continuation rejects malformed, incomplete, and stale inspection without replacing saved work", async () => {
+  const f = await fixture(); const input = createInput();
+  const repositoryState = { ...checkpoint.repositoryState, worktree: f.project };
+  input.checkpoint = { ...checkpoint, repositoryState };
+  const created = await f.task("create", input);
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1,
+    checkpoint: input.checkpoint, inspection: { repositoryState, evidence: "Inspected files." }, dependencyEvidence: [], externalEffectResolutions: [] };
+  expect(await f.task("continue", request)).toMatchObject({ error: { code: "APPROVAL_REQUIRED" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(created);
+  const approved = await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Implement this task." } });
+  const mcp = await f.mcp();
+  const ready = { ...request, expectedRevision: 2 };
+  for (const extra of [{ inspection: { repositoryState } }, { inspection: { repositoryState, evidence: " " } }, { externalEffectResolutions: [{ effectIndex: -1, evidence: "Invalid." }] }]) {
+    expect(await f.task("continue", { ...ready, ...extra })).toHaveProperty("error");
+    expect(await mcp("task_continue", { root: f.project, ...ready, ...extra })).toHaveProperty("isError");
+  }
+  expect(await f.task("continue", { ...ready, inspection: { repositoryState: { ...repositoryState, branch: "different" }, evidence: "Inspected." } })).toMatchObject({ error: { code: "REPOSITORY_INSPECTION_REQUIRED" } });
+  expect(await mcp("task_continue", { root: f.project, ...ready, checkpoint: { ...input.checkpoint, uncertainExternalEffects: ["Still unknown."] } })).toMatchObject({ error: { code: "EXTERNAL_OUTCOME_UNRESOLVED" } });
+  expect(await f.task("continue", { ...ready, expectedContractRevision: 2 })).toMatchObject({ error: { code: "STALE_CONTRACT_REVISION" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(approved);
+  const continued = await f.task("continue", ready);
+  expect(continued.error).toBeUndefined();
+  f.daemon.kill("SIGKILL"); await f.daemon.exited; await f.start();
+  expect(await mcp("task_continue", { root: f.project, ...ready })).toEqual(continued);
+  expect((await f.task("context", { taskId: input.taskId })).value.checkpoint).toEqual(continued.value.checkpoint);
+  expect(await f.task("continue", { ...ready, inspection: { ...ready.inspection, evidence: "Changed under the same key." } })).toMatchObject({ error: { code: "RETRY_CONFLICT" } });
+});
+
+test("interrupted continuation retains the prior checkpoint and retry records inspection once", async () => {
+  const f = await fixture(); const input = createInput();
+  input.checkpoint = { ...checkpoint, repositoryState: { ...checkpoint.repositoryState, worktree: f.project } };
+  await f.task("create", input);
+  const prior = await f.task("approve", { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, contract, approval: { source: "Implement this task." } });
+  f.daemon.kill("SIGKILL"); await f.daemon.exited;
+  const trace = join(f.root, "continuation.trace"); const traced = await f.start("test", trace);
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 2, expectedContractRevision: 1,
+    checkpoint: { ...input.checkpoint, correctedCheckpointRevision: 1 }, inspection: { repositoryState: input.checkpoint.repositoryState, evidence: "Inspected actual files." }, dependencyEvidence: [], externalEffectResolutions: [] };
+  const mcp = await f.mcp();
+  expect(await mcp("task_continue", { root: f.project, ...request })).toMatchObject({ error: { code: "RESPONSE_INTERRUPTED" } });
+  await traced.exited;
+  expect(readFileSync(trace, "utf8")).toMatch(/fsync\([^\n]*state\.sqlite-journal/);
+  expect(readFileSync(trace, "utf8")).not.toMatch(/pwrite64\([^\n]*state\.sqlite>/);
+  await f.start();
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(prior);
+  const saved = await f.task("continue", request);
+  expect(saved.value.checkpointCount).toBe(2);
+  expect(saved.value.checkpoint).toMatchObject({ previousCheckpointRevision: 1, content: { correctedCheckpointRevision: 1 }, continuation: { previousCheckpointRevision: 1, inspection: request.inspection } });
+  expect(await mcp("task_continue", { root: f.project, ...request })).toEqual(saved);
+});
+
+test("each uncertain effect retains its obligation even when descriptions are identical", async () => {
+  const f = await fixture(); const input = { ...createInput(), checkpoint: { ...checkpoint, uncertainExternalEffects: ["Unknown receipt.", "Unknown receipt."] } };
+  const prior = await f.task("create", input);
+  const request = { taskId: input.taskId, retryKey: crypto.randomUUID(), expectedRevision: 1, expectedContractRevision: 1, checkpoint: { ...checkpoint, uncertainExternalEffects: ["Unknown receipt."] } };
+  expect(await f.task("save", request)).toMatchObject({ error: { code: "EXTERNAL_OUTCOME_UNRESOLVED" } });
+  expect(await f.task("read", { taskId: input.taskId })).toEqual(prior);
+  const mcp = await f.mcp();
+  const saved = await mcp("task_save", { root: f.project, ...request, checkpoint: { ...request.checkpoint, review: { previousCheckpointRevision: 1, externalEffectResolutions: [{ effectIndex: 1, evidence: "The second receipt exists." }] } } });
+  expect(saved.error).toBeUndefined();
+  expect(saved.value.checkpoint.content.uncertainExternalEffects).toEqual(["Unknown receipt."]);
 });

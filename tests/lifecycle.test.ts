@@ -191,7 +191,7 @@ test("concurrent removal and main access cannot restart an unregistered instance
   const results = await Promise.all([f.cli("instance", "remove"), ...Array.from({ length: 6 }, () => f.cli("instance", "inspect"))]);
   expect(results[0]!.code).toBe(0);
   for (const reply of results.slice(1)) {
-    if (reply.code !== 0) expect(["SETUP_REQUIRED", "RESPONSE_INTERRUPTED", "INSTANCE_STOPPING", "INSTANCE_UNAVAILABLE"]).toContain(reply.result.error.code);
+    if (reply.code !== 0) expect(["SETUP_REQUIRED", "RESPONSE_INTERRUPTED", "INSTANCE_STOPPING", "INSTANCE_UNAVAILABLE", "OVERLOADED"]).toContain(reply.result.error.code);
   }
   expect((await f.cli("instance", "inspect")).result.error.code).toBe("SETUP_REQUIRED");
 });
